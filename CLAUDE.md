@@ -29,7 +29,7 @@ Key design points:
 - The MCP tools server is started over HTTP (requires the `web-server` package) and passed to Kimi during `session/new` via the `mcpServers` parameter.
 - **Diagnostics tool:** `kimi-code-ide-diagnostics.el` exposes `getDiagnostics` as an MCP tool, returning structured LSP-style JSON per file when queried.
 - **Window management:** When opening an `ediff` diff, the code temporarily deletes Kimi side windows to avoid layout conflicts, then restores `ediff-window-setup-function` and `ediff-split-window-function` afterward.
-- **Additional UX:** `kimi-code-ide-toggle-recent` switches the most recent Kimi window across sessions. Both the conversation and input buffers auto-enter Evil insert state when `evil-mode` is active.
+- **Additional UX:** `kimi-code-ide-toggle-recent` switches the most recent Kimi window across sessions.
 - Sessions are keyed by project directory (`project.el` root or `default-directory`). Each project gets its own Kimi instance and buffer (e.g. `*kimi-code[project-name]*`).
 
 ## Commands

@@ -53,7 +53,6 @@
 
 (declare-function kimi-code-ide-handlers-open-diff "kimi-code-ide-handlers"
                   (old-file-path new-file-contents tab-name))
-(declare-function evil-insert-state "evil" ())
 
 ;; External variable declarations
 (defvar vterm-shell)
@@ -638,9 +637,7 @@ Trailing slash is stripped to match Kimi CLI's path normalization."
   "Major mode for Kimi Code IDE input buffers."
   (setq-local truncate-lines nil)
   (setq-local word-wrap t)
-  (setq-local cursor-type 'bar)
-  (when (and (boundp 'evil-mode) evil-mode)
-    (evil-insert-state)))
+  (setq-local cursor-type 'bar))
 
 (define-derived-mode kimi-code-ide-mode org-mode "Kimi Code"
   "Major mode for Kimi Code IDE conversation buffers."
@@ -649,9 +646,7 @@ Trailing slash is stripped to match Kimi CLI's path normalization."
   (setq-local cursor-type 'bar)
   (buffer-disable-undo)
   (when (boundp 'org-ctrl-k-protect-subtree)
-    (setq-local org-ctrl-k-protect-subtree nil))
-  (when (and (boundp 'evil-mode) evil-mode)
-    (evil-insert-state)))
+    (setq-local org-ctrl-k-protect-subtree nil)))
 
 (defun kimi-code-ide--submit-input-buffer ()
   "Submit the contents of the current input buffer as a prompt."
