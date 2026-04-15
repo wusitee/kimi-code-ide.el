@@ -164,7 +164,11 @@ Call ON-SUCCESS with the session-id when session creation completes."
   (when-let ((session (kimi-code-ide-acp--get-session-for-project project-dir)))
     (let ((client (kimi-code-ide-acp-session-client session))
           (buffer (kimi-code-ide-acp-session-buffer session))
-          (mcp-servers nil))
+          (mcp-servers nil)
+          (system-prompt-parts
+           (delq nil
+                 (list "The conversation is rendered in Emacs Org mode. Please use Org syntax in your replies: *bold* for emphasis, =code= for inline code, #+begin_src lang / #+end_src for code blocks, and * / ** / *** for headings."
+                       kimi-code-ide-system-prompt))))
       ;; Add MCP tools server config if enabled
       (when (kimi-code-ide-tools-server-ensure-server)
         (when-let ((config (kimi-code-ide-tools-server-get-config)))
@@ -175,8 +179,8 @@ Call ON-SUCCESS with the session-id when session creation completes."
        :request (acp-make-session-new-request
                  :cwd project-dir
                  :mcp-servers mcp-servers
-                 :meta (when kimi-code-ide-system-prompt
-                         `((systemPrompt . ((append . ,kimi-code-ide-system-prompt))))))
+                 :meta (when system-prompt-parts
+                         `((systemPrompt . ((append . ,(mapconcat #'identity system-prompt-parts "\n\n")))))))
        :on-success (lambda (response)
                      (let-alist response
                        (let ((session-id .sessionId))
@@ -525,13 +529,37 @@ TODO: implement exit status retrieval."
            (options (map-nested-elt .params '(options)))
            (tool-call (map-nested-elt .params '(toolCall)))
            (tool-call-id (map-nested-elt tool-call '(toolCallId)))
+           (tool-name (or (map-nested-elt tool-call '(name))
+                          (map-nested-elt tool-call '(title))
+                          "tool"))
+           (tool-params (when (listp tool-call)
+                          (map-elt tool-call 'params)))
+           (tool-command (when (listp tool-params)
+                           (map-elt tool-params 'command)))
+           (tool-args (when (listp tool-params)
+                        (map-elt tool-params 'args)))
+           (tool-path (when (listp tool-params)
+                        (map-elt tool-params 'path)))
+           (tool-desc (when (listp tool-params)
+                        (map-elt tool-params 'description)))
+           (prompt-parts
+            (delq nil
+                  (list (format "Kimi wants to run `%s'" tool-name)
+                        (when tool-desc
+                          (format " (%s)" tool-desc))
+                        (when tool-command
+                          (format " command: %s" tool-command))
+                        (when (and tool-args (listp tool-args) (> (length tool-args) 0))
+                          (format " args: %s" (mapconcat #'shell-quote-argument tool-args " ")))
+                        (when tool-path
+                          (format " path: %s" tool-path))
+                        (format " [%s]: " (or tool-call-id "unknown")))))
            (option-names (mapcar (lambda (opt)
                                    (cons (map-elt opt 'name)
                                          (map-elt opt 'optionId)))
                                  options))
            (choice (completing-read
-                    (format "Kimi requests permission for %s: "
-                            (or tool-call-id "tool call"))
+                    (apply #'concat prompt-parts)
                     option-names nil t)))
       (acp-send-response
        :client client

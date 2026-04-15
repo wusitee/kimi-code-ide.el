@@ -6,8 +6,6 @@
 ;; Package-Requires: ((emacs "28.1") (acp "0.11.0") (transient "0.9.0") (web-server "0.1.2"))
 ;; Keywords: ai, kimi, code, assistant, acp
 
-
-
 ;; This file is not part of GNU Emacs.
 
 ;; This program is free software; you can redistribute it and/or modify
@@ -48,6 +46,7 @@
 
 (require 'cl-lib)
 (require 'project)
+(require 'org)
 (require 'kimi-code-ide-debug)
 (require 'kimi-code-ide-acp)
 (require 'kimi-code-ide-tools-server)
@@ -177,6 +176,15 @@ Can be either `vterm' or `eat'."
 (defvar-local kimi-code-ide--project-dir nil
   "Project directory for the current Kimi Code buffer.")
 
+(defvar-local kimi-code-ide--response-marker nil
+  "Marker for the current streaming response position.")
+
+(defvar-local kimi-code-ide--response-raw-text nil
+  "Accumulated raw Markdown text for the current streaming response.")
+
+(defvar-local kimi-code-ide--input-project-dir nil
+  "Project directory for the current input buffer.")
+
 (defvar kimi-code-ide--cleanup-in-progress nil
   "Flag to prevent recursive cleanup calls.")
 
@@ -198,50 +206,69 @@ Can be either `vterm' or `eat'."
   (funcall kimi-code-ide-buffer-name-function
            (or directory (kimi-code-ide--get-working-directory))))
 
+(defun kimi-code-ide--get-input-buffer-name (&optional directory)
+  "Get the input buffer name for the Kimi Code session in DIRECTORY."
+  (format "%s-input" (kimi-code-ide--get-buffer-name directory)))
+
 (defun kimi-code-ide--display-buffer-in-side-window (buffer)
-  "Display BUFFER in a side window according to customization."
-  (let ((window
-         (if kimi-code-ide-use-side-window
-             (let* ((side kimi-code-ide-window-side)
-                    (slot 0)
-                    (window-parameters '((no-delete-other-windows . t)))
-                    (display-buffer-alist
-                     `((,(regexp-quote (buffer-name buffer))
-                        (display-buffer-in-side-window)
-                        (side . ,side)
-                        (slot . ,slot)
-                        ,@(when (memq side '(left right))
-                            `((window-width
-                               . ,(lambda (win)
-                                    (let ((delta (- kimi-code-ide-window-width
-                                                    (window-body-width win))))
-                                      (unless (zerop delta)
-                                        (window-resize win delta t)))))))
-                        ,@(when (memq side '(top bottom))
-                            `((window-height . ,kimi-code-ide-window-height)))
-                        (window-parameters . ,window-parameters)))))
-               (display-buffer buffer))
-           (display-buffer buffer))))
+  "Display BUFFER in a side window, together with its input buffer."
+  (let* ((side kimi-code-ide-window-side)
+         (window-parameters '((no-delete-other-windows . t)))
+         (conv-window
+          (if kimi-code-ide-use-side-window
+              (display-buffer-in-side-window
+               buffer
+               `((side . ,side)
+                 (slot . 0)
+                 ,@(when (memq side '(left right))
+                     `((window-width
+                        . ,(lambda (win)
+                             (let ((delta (- kimi-code-ide-window-width
+                                             (window-body-width win))))
+                               (unless (zerop delta)
+                                 (window-resize win delta t)))))))
+                 ,@(when (memq side '(top bottom))
+                     `((window-height . ,kimi-code-ide-window-height)))
+                 (window-parameters . ,window-parameters)))
+            (display-buffer buffer)))
+         (project-dir (buffer-local-value 'kimi-code-ide--project-dir buffer))
+         (input-buffer (when project-dir
+                         (kimi-code-ide--ensure-input-buffer project-dir))))
+    (when (and conv-window input-buffer)
+      (unless (get-buffer-window input-buffer)
+        (if kimi-code-ide-use-side-window
+            (display-buffer-in-side-window
+             input-buffer
+             `((side . ,side)
+               (slot . 1)
+               ,@(when (memq side '(left right))
+                   `((window-width
+                      . ,(lambda (win)
+                           (let ((delta (- kimi-code-ide-window-width
+                                           (window-body-width win))))
+                             (unless (zerop delta)
+                               (window-resize win delta t)))))))
+               (window-height . 4)
+               (window-parameters . ,window-parameters)))
+          (let ((input-win (split-window conv-window nil 'below)))
+            (set-window-buffer input-win input-buffer)
+            (set-window-text-height input-win 4)))))
     (setq kimi-code-ide--last-accessed-buffer buffer)
-    (when (and window kimi-code-ide-focus-on-open)
-      (select-window window))
-    (when (and window
+    (when (and conv-window kimi-code-ide-focus-on-open)
+      (if-let ((input-win (get-buffer-window input-buffer)))
+          (select-window input-win)
+        (select-window conv-window)))
+    (when (and conv-window
                kimi-code-ide-use-side-window
                (memq kimi-code-ide-window-side '(top bottom)))
-      (set-window-text-height window kimi-code-ide-window-height)
-      (set-window-dedicated-p window t))
-    window))
+      (set-window-text-height conv-window kimi-code-ide-window-height)
+      (set-window-dedicated-p conv-window t))
+    conv-window))
 
 ;;; Buffer Rendering
 
-(defvar-local kimi-code-ide--response-marker nil
-  "Marker for the current streaming response position.")
-
-(defvar-local kimi-code-ide--input-start nil
-  "Marker for the start of the user input area.")
-
 (defun kimi-code-ide--ensure-buffer (project-dir)
-  "Get or create the Kimi Code buffer for PROJECT-DIR."
+  "Get or create the Kimi Code conversation buffer for PROJECT-DIR."
   (let ((buffer-name (kimi-code-ide--get-buffer-name project-dir)))
     (if-let ((buffer (get-buffer buffer-name)))
         buffer
@@ -256,32 +283,80 @@ Can be either `vterm' or `eat'."
                     nil t))
         buffer))))
 
+(defun kimi-code-ide--ensure-input-buffer (project-dir)
+  "Get or create the Kimi Code input buffer for PROJECT-DIR."
+  (let ((buffer-name (kimi-code-ide--get-input-buffer-name project-dir)))
+    (if-let ((buffer (get-buffer buffer-name)))
+        buffer
+      (let ((buffer (get-buffer-create buffer-name)))
+        (with-current-buffer buffer
+          (kimi-code-ide-input-mode)
+          (setq default-directory project-dir)
+          (setq kimi-code-ide--input-project-dir project-dir)
+          (setq buffer-read-only nil)
+          (erase-buffer))
+        buffer))))
+
+(defun kimi-code-ide--markdown-to-org (text)
+  "Convert lightweight Markdown in TEXT to Org syntax."
+  (with-temp-buffer
+    (insert text)
+    ;; Code blocks first (before inline code eats backticks)
+    (goto-char (point-min))
+    (while (re-search-forward (concat "^```\\(?:\\(.*\\)\\)?\\(" "\n" "\\(?:.*\\(?:\n\\|\\'\\)\\)*?\\)```") nil t)
+      (let ((lang (or (match-string 1) ""))
+            (content (match-string 2)))
+        (replace-match (concat "#+begin_src " lang content "#+end_src") t t)))
+    ;; Links [text](url)
+    (goto-char (point-min))
+    (while (re-search-forward "\\[\\([^]]+\\)\\](\\([^)]+\\))" nil t)
+      (let ((text (match-string 1))
+            (url (match-string 2)))
+        (replace-match (format "[[%s][%s]]" url text) t t)))
+    ;; Inline code
+    (goto-char (point-min))
+    (while (re-search-forward "`\\([^`]+\\)`" nil t)
+      (let ((code (match-string 1)))
+        (replace-match (concat "=" code "=") t t)))
+    ;; Bold **text**
+    (goto-char (point-min))
+    (while (re-search-forward "\\*\\*\\([^*]+\\)\\*\\*" nil t)
+      (let ((content (match-string 1)))
+        (replace-match (concat "*" content "*") t t)))
+    ;; Headers
+    (goto-char (point-min))
+    (while (re-search-forward "^\\(#\\{1,6\\}\\)[ \t]+\\(.+\\)$" nil t)
+      (let ((level (length (match-string 1)))
+            (title (match-string 2)))
+        (replace-match (format "%s %s" (make-string level ?*) title) t t)))
+    (buffer-string)))
+
 (defun kimi-code-ide--insert-read-only (text &rest props)
   "Insert TEXT with read-only property and optional face PROPS."
   (insert (apply #'propertize text 'read-only t 'rear-nonsticky t props)))
 
-(defun kimi-code-ide--prepare-input-area ()
-  "Ensure there's a writable input area at the end of the buffer."
-  (goto-char (point-max))
-  ;; Insert a writable separator so the input area doesn't inherit read-only
-  (insert (propertize "\n" 'read-only nil 'rear-nonsticky t))
-  (setq kimi-code-ide--input-start (point-marker))
-  (set-marker-insertion-type kimi-code-ide--input-start nil))
+(defun kimi-code-ide--flush-response-raw-text ()
+  "Convert accumulated raw Markdown to Org and clear the marker."
+  (when (and kimi-code-ide--response-marker
+             kimi-code-ide--response-raw-text
+             (> (length kimi-code-ide--response-raw-text) 0))
+    (let ((inhibit-read-only t))
+      (goto-char kimi-code-ide--response-marker)
+      (delete-region (point) (point-max))
+      (kimi-code-ide--insert-read-only
+       (kimi-code-ide--markdown-to-org kimi-code-ide--response-raw-text))
+      (setq kimi-code-ide--response-raw-text nil)))
+  (when kimi-code-ide--response-marker
+    (setq kimi-code-ide--response-marker nil)))
 
 (defun kimi-code-ide--render-welcome (project-dir)
   "Render welcome message for PROJECT-DIR."
-  (let ((inhibit-read-only t))
-    (erase-buffer)
-    (kimi-code-ide--insert-read-only
-     (format "Kimi Code IDE — %s\n"
-             (file-name-nondirectory (directory-file-name project-dir)))
-     'face 'bold)
-    (kimi-code-ide--insert-read-only
-     "────────────────────────────────────────\n"
-     'face 'shadow)
-    (kimi-code-ide--insert-read-only "\n")
-    (setq kimi-code-ide--response-marker nil)
-    (kimi-code-ide--prepare-input-area)))
+  (erase-buffer)
+  (kimi-code-ide--insert-read-only
+   (format "* Kimi Code IDE — %s\n\n"
+           (file-name-nondirectory (directory-file-name project-dir))))
+  (setq kimi-code-ide--response-marker nil)
+  (setq kimi-code-ide--response-raw-text nil))
 
 (defun kimi-code-ide--render-function (project-dir)
   "Return the render function for PROJECT-DIR."
@@ -296,43 +371,64 @@ Can be either `vterm' or `eat'."
   (let ((inhibit-read-only t))
     (pcase type
       ('user-prompt
-       (when kimi-code-ide--response-marker
-         (setq kimi-code-ide--response-marker nil))
-       (goto-char kimi-code-ide--input-start)
-       (kimi-code-ide--insert-read-only "You: " 'face 'bold)
-       (kimi-code-ide--insert-read-only data)
-       (kimi-code-ide--insert-read-only "\n")
-       (kimi-code-ide--prepare-input-area))
+       (kimi-code-ide--flush-response-raw-text)
+       (goto-char (point-max))
+       (kimi-code-ide--insert-read-only "* You\n")
+       (kimi-code-ide--insert-read-only (kimi-code-ide--markdown-to-org data))
+       (kimi-code-ide--insert-read-only "\n-----\n\n"))
       ('agent-text
        (unless kimi-code-ide--response-marker
-         (goto-char kimi-code-ide--input-start)
-         (kimi-code-ide--insert-read-only "Kimi: " 'face 'bold)
+         (goto-char (point-max))
+         (kimi-code-ide--insert-read-only "* Kimi\n")
          (setq kimi-code-ide--response-marker (point-marker))
-         (set-marker-insertion-type kimi-code-ide--response-marker t))
+         (set-marker-insertion-type kimi-code-ide--response-marker t)
+         (setq kimi-code-ide--response-raw-text ""))
        (goto-char kimi-code-ide--response-marker)
+       (setq kimi-code-ide--response-raw-text
+             (concat kimi-code-ide--response-raw-text data))
        (kimi-code-ide--insert-read-only data))
       ('tool-call
-       (when kimi-code-ide--response-marker
-         (setq kimi-code-ide--response-marker nil))
-       (goto-char kimi-code-ide--input-start)
-       (kimi-code-ide--insert-read-only "[Tool call]\n" 'face 'shadow)
-       (kimi-code-ide--insert-read-only (format "%S\n" data))
-       (kimi-code-ide--prepare-input-area))
+       (kimi-code-ide--flush-response-raw-text)
+       (goto-char (point-max))
+       (let-alist data
+         (kimi-code-ide--insert-read-only "#+BEGIN_QUOTE\n")
+         (kimi-code-ide--insert-read-only
+          (format "🔧 %s (%s)\n" (or .title "Tool") .status))
+         ;; Show useful params when available
+         (let* ((params (when (listp data) (map-elt data 'params)))
+                (cmd (when (listp params) (map-elt params 'command)))
+                (args (when (listp params) (map-elt params 'args)))
+                (path (when (listp params) (map-elt params 'path)))
+                (file (when (listp params) (map-elt params 'file))))
+           (when cmd
+             (kimi-code-ide--insert-read-only
+              (format "  Command: %s\n"
+                      (if (and args (listp args) (> (length args) 0))
+                          (mapconcat #'shell-quote-argument (cons cmd args) " ")
+                        cmd))))
+           (when (or path file)
+             (kimi-code-ide--insert-read-only
+              (format "  Path: %s\n" (or path file)))))
+         (when (and (vectorp .content) (> (length .content) 0))
+           (dolist (item (append .content nil))
+             (let-alist item
+               (when (and (equal .type "text") .text (> (length .text) 0))
+                 (kimi-code-ide--insert-read-only (format "  → %s\n" .text))))))
+         (kimi-code-ide--insert-read-only "#+END_QUOTE\n\n")))
       ('plan
-       (when kimi-code-ide--response-marker
-         (setq kimi-code-ide--response-marker nil))
-       (goto-char kimi-code-ide--input-start)
-       (kimi-code-ide--insert-read-only "[Plan]\n" 'face 'shadow)
+       (kimi-code-ide--flush-response-raw-text)
+       (goto-char (point-max))
+       (kimi-code-ide--insert-read-only "#+BEGIN_QUOTE\n")
+       (kimi-code-ide--insert-read-only "[Plan]\n")
        (dolist (entry data)
          (let-alist entry
-           (kimi-code-ide--insert-read-only
-            (format "  • %s [%s]\n" .content .status))))
-       (kimi-code-ide--prepare-input-area))
+           (kimi-code-ide--insert-read-only (format "- %s [%s]\n" .content .status))))
+       (kimi-code-ide--insert-read-only "#+END_QUOTE\n\n"))
       ('diff
-       (when kimi-code-ide--response-marker
-         (setq kimi-code-ide--response-marker nil))
-       (goto-char kimi-code-ide--input-start)
-       (kimi-code-ide--insert-read-only "[Diff suggestion]\n" 'face 'shadow)
+       (kimi-code-ide--flush-response-raw-text)
+       (goto-char (point-max))
+       (kimi-code-ide--insert-read-only "#+BEGIN_QUOTE\n")
+       (kimi-code-ide--insert-read-only "[Diff suggestion]\n")
        (when kimi-code-ide-use-ide-diff
          (let-alist data
            (condition-case err
@@ -340,75 +436,67 @@ Can be either `vterm' or `eat'."
              (error
               (kimi-code-ide-debug "Failed to open diff: %s" err)
               (kimi-code-ide--insert-read-only (format "File: %s\n" .path))))))
-       (kimi-code-ide--prepare-input-area))
+       (kimi-code-ide--insert-read-only "#+END_QUOTE\n\n"))
       ('prompt-complete
-       (when kimi-code-ide--response-marker
-         (setq kimi-code-ide--response-marker nil))
-       (goto-char kimi-code-ide--input-start)
-       (kimi-code-ide--insert-read-only "\n")
-       (kimi-code-ide--prepare-input-area))
+       (kimi-code-ide--flush-response-raw-text)
+       (goto-char (point-max))
+       (kimi-code-ide--insert-read-only "\n\n"))
       ('prompt-error
-       (when kimi-code-ide--response-marker
-         (setq kimi-code-ide--response-marker nil))
-       (goto-char kimi-code-ide--input-start)
+       (kimi-code-ide--flush-response-raw-text)
+       (goto-char (point-max))
+       (kimi-code-ide--insert-read-only "#+BEGIN_CENTER\n")
        (kimi-code-ide--insert-read-only
-        (format "[Error: %s]\n" (map-elt data 'message))
-        'face 'error)
-       (kimi-code-ide--prepare-input-area))
+        (format "[Error: %s]\n" (map-elt data 'message)))
+       (kimi-code-ide--insert-read-only "#+END_CENTER\n\n"))
       ('session-ready
-       (goto-char kimi-code-ide--input-start)
-       (kimi-code-ide--insert-read-only "[Session ready]\n" 'face 'success)
-       (kimi-code-ide--prepare-input-area)))
-    ;; Keep window point at end if visible, and ensure cursor is in input area
+       (goto-char (point-max))
+       (kimi-code-ide--insert-read-only "#+BEGIN_CENTER\n")
+       (kimi-code-ide--insert-read-only "[Session ready]\n")
+       (kimi-code-ide--insert-read-only "#+END_CENTER\n\n")))
+    ;; Keep window point at end if visible
     (when-let ((win (get-buffer-window (current-buffer))))
-      (set-window-point win (point-max)))
-    (goto-char (point-max))
-    (when (and (boundp 'evil-mode) evil-mode)
-      (evil-insert-state))))
+      (set-window-point win (point-max)))))
 
-;;; Mode Definition
+;;; Mode Definitions
 
-(defvar-keymap kimi-code-ide-mode-map
-  :doc "Keymap for `kimi-code-ide-mode'."
-  "RET" #'kimi-code-ide--submit-input
-  "S-<return>" #'kimi-code-ide--insert-newline
+(defvar-keymap kimi-code-ide-input-mode-map
+  :doc "Keymap for `kimi-code-ide-input-mode'."
+  "C-c C-c" #'kimi-code-ide--submit-input-buffer
   "C-c C-p" #'kimi-code-ide-send-prompt
-  "C-c C-c" #'kimi-code-ide-cancel-prompt
   "C-c C-q" #'kimi-code-ide-stop)
 
-(define-derived-mode kimi-code-ide-mode fundamental-mode "Kimi Code"
-  "Major mode for Kimi Code IDE buffers."
+(define-derived-mode kimi-code-ide-input-mode text-mode "Kimi Input"
+  "Major mode for Kimi Code IDE input buffers."
+  (setq-local truncate-lines nil)
+  (setq-local word-wrap t)
+  (setq-local cursor-type 'bar)
+  (when (and (boundp 'evil-mode) evil-mode)
+    (evil-insert-state)))
+
+(define-derived-mode kimi-code-ide-mode org-mode "Kimi Code"
+  "Major mode for Kimi Code IDE conversation buffers."
   (setq-local truncate-lines nil)
   (setq-local word-wrap t)
   (setq-local cursor-type 'bar)
   (buffer-disable-undo)
-  ;; Enter insert state for evil-mode users (e.g. Doom Emacs)
+  (when (boundp 'org-ctrl-k-protect-subtree)
+    (setq-local org-ctrl-k-protect-subtree nil))
   (when (and (boundp 'evil-mode) evil-mode)
     (evil-insert-state)))
 
-(defun kimi-code-ide--insert-newline ()
-  "Insert a newline at point in the input area."
+(defun kimi-code-ide--submit-input-buffer ()
+  "Submit the contents of the current input buffer as a prompt."
   (interactive)
-  (if (>= (point) kimi-code-ide--input-start)
-      (insert "\n")
-    (message "Can only insert newlines in the input area")))
-
-(defun kimi-code-ide--submit-input ()
-  "Submit the text in the input area as a prompt."
-  (interactive)
-  (unless kimi-code-ide--input-start
-    (user-error "No input area available"))
-  (let ((input (buffer-substring-no-properties kimi-code-ide--input-start (point-max))))
-    (setq input (string-trim input))
+  (unless kimi-code-ide--input-project-dir
+    (user-error "Not in a Kimi Code input buffer"))
+  (let ((input (string-trim (buffer-substring-no-properties (point-min) (point-max)))))
     (when (string-empty-p input)
-      (let ((inhibit-read-only t))
-        (delete-region kimi-code-ide--input-start (point-max))
-        (kimi-code-ide--prepare-input-area))
+      (erase-buffer)
       (user-error "Empty prompt"))
-    (let ((inhibit-read-only t))
-      (delete-region kimi-code-ide--input-start (point-max))
-      (kimi-code-ide--prepare-input-area))
-    (kimi-code-ide-send-prompt input)))
+    (let ((project-dir kimi-code-ide--input-project-dir))
+      (erase-buffer)
+      (let ((default-directory project-dir))
+        (kimi-code-ide-send-prompt input)))))
 
 ;;; CLI Detection
 
@@ -427,13 +515,17 @@ Can be either `vterm' or `eat'."
 
 ;;; Commands
 
-(defun kimi-code-ide--toggle-existing-window (existing-buffer _working-dir)
+(defun kimi-code-ide--toggle-existing-window (existing-buffer working-dir)
   "Toggle visibility of EXISTING-BUFFER window for WORKING-DIR."
-  (let ((window (get-buffer-window existing-buffer)))
+  (let ((window (get-buffer-window existing-buffer))
+        (input-buffer (kimi-code-ide--get-input-buffer-name working-dir)))
     (if window
         (progn
           (setq kimi-code-ide--last-accessed-buffer existing-buffer)
-          (delete-window window)
+          ;; Delete input window(s) first, then the conversation window
+          (dolist (win (get-buffer-window-list input-buffer nil t))
+            (ignore-errors (delete-window win)))
+          (ignore-errors (delete-window window))
           (kimi-code-ide-debug "Kimi Code window hidden"))
       (progn
         (kimi-code-ide--display-buffer-in-side-window existing-buffer)
@@ -450,12 +542,18 @@ Can be either `vterm' or `eat'."
             (when session-id
               (kimi-code-ide-tools-server-session-ended session-id)
               (remhash directory kimi-code-ide--session-ids)))
-          (let ((buffer-name (kimi-code-ide--get-buffer-name directory)))
+          (let ((buffer-name (kimi-code-ide--get-buffer-name directory))
+                (input-buffer-name (kimi-code-ide--get-input-buffer-name directory)))
             (when-let ((buffer (get-buffer buffer-name)))
               (when (buffer-live-p buffer)
-                (let ((kill-buffer-hook nil)
-                      (kill-buffer-query-functions nil))
-                  (kill-buffer buffer)))))
+                (with-current-buffer buffer
+                  (let (kill-buffer-hook kill-buffer-query-functions)
+                    (kill-buffer buffer)))))
+            (when-let ((input-buffer (get-buffer input-buffer-name)))
+              (when (buffer-live-p input-buffer)
+                (with-current-buffer input-buffer
+                  (let (kill-buffer-hook kill-buffer-query-functions)
+                    (kill-buffer input-buffer))))))
           (kimi-code-ide-debug "Cleaned up Kimi Code session for %s"
                                (file-name-nondirectory (directory-file-name directory))))
       (setq kimi-code-ide--cleanup-in-progress nil))))
@@ -496,11 +594,19 @@ Can be either `vterm' or `eat'."
   "Stop the Kimi Code session for the current project or directory."
   (interactive)
   (let* ((working-dir (kimi-code-ide--get-working-directory))
-         (buffer-name (kimi-code-ide--get-buffer-name)))
+         (buffer-name (kimi-code-ide--get-buffer-name))
+         (input-buffer-name (kimi-code-ide--get-input-buffer-name working-dir)))
     (kimi-code-ide-acp-stop working-dir)
     (when-let ((buffer (get-buffer buffer-name)))
       (when (buffer-live-p buffer)
-        (kill-buffer buffer)))
+        (with-current-buffer buffer
+          (let (kill-buffer-hook kill-buffer-query-functions)
+            (kill-buffer buffer)))))
+    (when-let ((input-buffer (get-buffer input-buffer-name)))
+      (when (buffer-live-p input-buffer)
+        (with-current-buffer input-buffer
+          (let (kill-buffer-hook kill-buffer-query-functions)
+            (kill-buffer input-buffer)))))
     (kimi-code-ide-log "Stopped Kimi Code in %s"
                        (file-name-nondirectory (directory-file-name working-dir)))))
 
@@ -508,10 +614,14 @@ Can be either `vterm' or `eat'."
 (defun kimi-code-ide-switch-to-buffer ()
   "Switch to the Kimi Code buffer for the current project."
   (interactive)
-  (let ((buffer-name (kimi-code-ide--get-buffer-name)))
-    (if-let ((buffer (get-buffer buffer-name)))
+  (let* ((buffer-name (kimi-code-ide--get-buffer-name))
+         (input-buffer-name (kimi-code-ide--get-input-buffer-name))
+         (buffer (get-buffer buffer-name)))
+    (if buffer
         (if-let ((window (get-buffer-window buffer)))
-            (select-window window)
+            (if-let ((input-win (get-buffer-window (get-buffer input-buffer-name))))
+                (select-window input-win)
+              (select-window window))
           (kimi-code-ide--display-buffer-in-side-window buffer))
       (user-error "No Kimi Code session for this project.  Use M-x kimi-code-ide to start one"))))
 
