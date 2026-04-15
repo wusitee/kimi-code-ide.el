@@ -185,6 +185,9 @@ Can be either `vterm' or `eat'."
 (defvar-local kimi-code-ide--input-project-dir nil
   "Project directory for the current input buffer.")
 
+(defvar kimi-code-ide--pending-resume-history (make-hash-table :test 'equal)
+  "Hash table mapping project directories to pending resume history strings.")
+
 (defvar kimi-code-ide--cleanup-in-progress nil
   "Flag to prevent recursive cleanup calls.")
 
@@ -195,11 +198,172 @@ Can be either `vterm' or `eat'."
   (format "*kimi-code[%s]*"
           (file-name-nondirectory (directory-file-name directory))))
 
+(defun kimi-code-ide--kimi-session-dir (project-dir)
+  "Return the Kimi sessions directory hash for PROJECT-DIR."
+  (expand-file-name
+   (format "sessions/%s" (md5 project-dir))
+   (expand-file-name "~/.kimi")))
+
+(defun kimi-code-ide--latest-kimi-context-file (project-dir)
+  "Return the most recent context.jsonl file for PROJECT-DIR with turns, or nil."
+  (let* ((sessions-dir (kimi-code-ide--kimi-session-dir project-dir))
+         (context-files
+          (when (file-directory-p sessions-dir)
+            (directory-files-recursively sessions-dir "context\\.jsonl$" t))))
+    (when context-files
+      (setq context-files
+            (sort context-files
+                  (lambda (a b)
+                    (> (float-time (file-attribute-modification-time (file-attributes a)))
+                       (float-time (file-attribute-modification-time (file-attributes b)))))))
+      (cl-loop for file in context-files
+               when (kimi-code-ide--parse-context-jsonl file)
+               return file))))
+
+(defun kimi-code-ide--read-kimi-session-turns (project-dir)
+  "Return parsed conversation turns from Kimi's session files for PROJECT-DIR.
+Each turn is a cons cell (USER-TEXT . ASSISTANT-TEXT).  Returns nil
+if no history is found."
+  (when-let ((file (kimi-code-ide--latest-kimi-context-file project-dir)))
+    (kimi-code-ide--parse-context-jsonl file)))
+
+(defun kimi-code-ide--format-session-turns (turns)
+  "Format TURNS into a string suitable for prompt injection."
+  (when turns
+    (concat "Continuing our previous conversation:\n\n"
+            (mapconcat
+             (lambda (turn)
+               (concat "[User]:\n" (car turn)
+                       "\n\n[Kimi]:\n" (cdr turn)))
+             turns "\n\n")
+            "\n\nPlease continue from here.\n\n")))
+
+(defun kimi-code-ide--read-kimi-session-history (project-dir)
+  "Read conversation history from Kimi's session files for PROJECT-DIR.
+Returns a formatted string suitable for prompt injection, or nil if
+no history is found."
+  (kimi-code-ide--format-session-turns (kimi-code-ide--read-kimi-session-turns project-dir)))
+
+(defun kimi-code-ide--parse-context-jsonl (file)
+  "Parse Kimi's context.jsonl FILE and return a list of (user . assistant) turns."
+  (when (file-readable-p file)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (let ((turns '())
+            (current-user nil)
+            (current-assistant '()))
+        (goto-char (point-min))
+        (while (not (eobp))
+          (skip-chars-forward " \t\n\r")
+          (when (not (eobp))
+            (condition-case nil
+                (let ((obj (json-parse-buffer :object-type 'alist
+                                              :array-type 'list
+                                              :null-object nil)))
+                  (let ((role (cdr (assq 'role obj)))
+                        (content (cdr (assq 'content obj))))
+                    (cond
+                     ((equal role "user")
+                      (when (or current-user current-assistant)
+                        (push (cons (or current-user "")
+                                    (string-join (nreverse current-assistant) "\n\n"))
+                              turns))
+                      (setq current-user (kimi-code-ide--extract-user-text content))
+                      (setq current-assistant '()))
+                     ((equal role "assistant")
+                      (let ((text (kimi-code-ide--extract-assistant-text content)))
+                        (when text
+                          (push text current-assistant))))
+                     ((equal role "tool")
+                      (when (stringp content)
+                        (push (format "[Tool result]\n%s" content) current-assistant))))))
+              (error (goto-char (point-max))))))
+        (when (or current-user current-assistant)
+          (push (cons (or current-user "") (string-join (nreverse current-assistant) "\n\n")) turns))
+        ;; Filter out turns where both are empty
+        (setq turns (seq-filter (lambda (turn) (or (> (length (car turn)) 0)
+                                                  (> (length (cdr turn)) 0)))
+                               (nreverse turns)))
+        (when (> (length turns) 0)
+          turns)))))
+
+(defun kimi-code-ide--extract-user-text (content)
+  "Extract clean user text from CONTENT alist or string."
+  (cond
+   ((stringp content)
+    (if (kimi-code-ide--system-noise-p content) "" content))
+   ((listp content)
+    (string-join
+     (seq-filter
+      (lambda (s) (> (length s) 0))
+      (mapcar (lambda (part)
+                (when (equal (cdr (assq 'type part)) "text")
+                  (let ((text (cdr (assq 'text part))))
+                    (if (and (stringp text) (kimi-code-ide--system-noise-p text))
+                        ""
+                      (or text "")))))
+              content))
+     "\n\n"))
+   (t "")))
+
+(defun kimi-code-ide--extract-assistant-text (content)
+  "Extract clean assistant text from CONTENT alist or string."
+  (cond
+   ((stringp content) content)
+   ((listp content)
+    (string-join
+     (seq-filter
+      (lambda (s) (> (length s) 0))
+      (mapcar (lambda (part)
+                (when (equal (cdr (assq 'type part)) "text")
+                  (or (cdr (assq 'text part)) "")))
+              content))
+     "\n\n"))
+   (t nil)))
+
+(defun kimi-code-ide--system-noise-p (text)
+  "Return non-nil if TEXT is Kimi internal system metadata."
+  (or (string-match-p "<system>" text)
+      (string-match-p "<current_focus>" text)
+      (string-match-p "<environment>" text)
+      (string-match-p "<completed_tasks>" text)
+      (string-match-p "<active_issues>" text)
+      (string-match-p "<code_state>" text)
+      (string-match-p "<important_context>" text)
+      (string-match-p "<image path=" text)
+      (string-match-p "Previous context has been compacted" text)))
+
+(defun kimi-code-ide--extract-conversation-history (buffer)
+  "Extract user/Kimi turns from BUFFER as a single string."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char (point-min))
+      (let ((turns '()))
+        (when (re-search-forward "^\\* \\(You\\|Kimi\\)\\(?:[ \t]\\|$\\)" nil t)
+          (goto-char (match-beginning 0))
+          (while (looking-at "^\\* \\(You\\|Kimi\\)\\(?:[ \t]\\|$\\)")
+            (let ((speaker (match-string 1))
+                  (start (match-end 0)))
+              (forward-line)
+              (let ((end (or (and (re-search-forward "^\\* \\(You\\|Kimi\\)\\(?:[ \t]\\|$\\)" nil t)
+                                  (match-beginning 0))
+                             (point-max))))
+                (let ((text (string-trim (buffer-substring-no-properties start end))))
+                  (push (format "[%s]:\n%s" speaker text) turns))
+                (when (< (point) end)
+                  (goto-char end)))))
+          (when turns
+            (concat "Continuing our previous conversation:\n\n"
+                    (mapconcat #'identity (nreverse turns) "\n\n")
+                    "\n\nPlease continue from here.\n\n")))))))
+
 (defun kimi-code-ide--get-working-directory ()
-  "Get the current working directory (project root or current directory)."
-  (if-let ((project (project-current)))
-      (expand-file-name (project-root project))
-    (expand-file-name default-directory)))
+  "Get the current working directory (project root or current directory).
+Trailing slash is stripped to match Kimi CLI's path normalization."
+  (directory-file-name
+   (if-let ((project (project-current)))
+       (expand-file-name (project-root project))
+     (expand-file-name default-directory))))
 
 (defun kimi-code-ide--get-buffer-name (&optional directory)
   "Get the buffer name for the Kimi Code session in DIRECTORY."
@@ -452,10 +616,15 @@ Can be either `vterm' or `eat'."
        (goto-char (point-max))
        (kimi-code-ide--insert-read-only "#+BEGIN_CENTER\n")
        (kimi-code-ide--insert-read-only "[Session ready]\n")
-       (kimi-code-ide--insert-read-only "#+END_CENTER\n\n")))
+       (kimi-code-ide--insert-read-only "#+END_CENTER\n\n"))
+      ('session-resumed
+       (goto-char (point-max))
+       (kimi-code-ide--insert-read-only "#+BEGIN_CENTER\n")
+       (kimi-code-ide--insert-read-only "[Session resumed]\n")
+       (kimi-code-ide--insert-read-only "#+END_CENTER\n\n"))))
     ;; Keep window point at end if visible
     (when-let ((win (get-buffer-window (current-buffer))))
-      (set-window-point win (point-max)))))
+      (set-window-point win (point-max))))
 
 ;;; Mode Definitions
 
@@ -531,17 +700,23 @@ Can be either `vterm' or `eat'."
         (kimi-code-ide--display-buffer-in-side-window existing-buffer)
         (kimi-code-ide-debug "Kimi Code window shown")))))
 
+(defun kimi-code-ide--cleanup-acp (directory)
+  "Stop ACP and tools server for DIRECTORY without killing buffers."
+  (kimi-code-ide-acp-stop directory)
+  (let ((session-id (gethash directory kimi-code-ide--session-ids)))
+    (when session-id
+      (kimi-code-ide-tools-server-session-ended session-id)
+      (remhash directory kimi-code-ide--session-ids)))
+  (kimi-code-ide-debug "Cleaned up ACP for %s"
+                       (file-name-nondirectory (directory-file-name directory))))
+
 (defun kimi-code-ide--cleanup-on-exit (directory)
   "Clean up Kimi Code session when it exits for DIRECTORY."
   (unless kimi-code-ide--cleanup-in-progress
     (setq kimi-code-ide--cleanup-in-progress t)
     (unwind-protect
         (progn
-          (kimi-code-ide-acp-stop directory)
-          (let ((session-id (gethash directory kimi-code-ide--session-ids)))
-            (when session-id
-              (kimi-code-ide-tools-server-session-ended session-id)
-              (remhash directory kimi-code-ide--session-ids)))
+          (kimi-code-ide--cleanup-acp directory)
           (let ((buffer-name (kimi-code-ide--get-buffer-name directory))
                 (input-buffer-name (kimi-code-ide--get-input-buffer-name directory)))
             (when-let ((buffer (get-buffer buffer-name)))
@@ -554,12 +729,14 @@ Can be either `vterm' or `eat'."
                 (with-current-buffer input-buffer
                   (let (kill-buffer-hook kill-buffer-query-functions)
                     (kill-buffer input-buffer))))))
-          (kimi-code-ide-debug "Cleaned up Kimi Code session for %s"
+          (kimi-code-ide-debug "Killed Kimi Code buffers for %s"
                                (file-name-nondirectory (directory-file-name directory))))
       (setq kimi-code-ide--cleanup-in-progress nil))))
 
-(defun kimi-code-ide--start-session ()
-  "Start a Kimi Code ACP session for the current project."
+(defun kimi-code-ide--start-session (&optional resume)
+  "Start a Kimi Code ACP session for the current project.
+When RESUME is non-nil and an existing conversation buffer is
+available, reuse it without erasing history."
   (unless (kimi-code-ide--ensure-cli)
     (user-error "Kimi Code CLI not available.  Please install it and ensure it's in PATH"))
   (let* ((working-dir (kimi-code-ide--get-working-directory))
@@ -571,15 +748,21 @@ Can be either `vterm' or `eat'."
              session
              (kimi-code-ide-acp-session-initialized session))
         (kimi-code-ide--toggle-existing-window existing-buffer working-dir)
-      (let* ((buffer (kimi-code-ide--ensure-buffer working-dir))
-             (render-fn (kimi-code-ide--render-function working-dir)))
+      (let* ((buffer (if (and resume existing-buffer (buffer-live-p existing-buffer))
+                         existing-buffer
+                       (kimi-code-ide--ensure-buffer working-dir)))
+             (render-fn (kimi-code-ide--render-function working-dir))
+             (resuming-p (and resume existing-buffer (buffer-live-p existing-buffer)
+                              (not (and session (kimi-code-ide-acp-session-initialized session))))))
         (kimi-code-ide-acp--set-render-function working-dir render-fn)
         (kimi-code-ide--display-buffer-in-side-window buffer)
         (kimi-code-ide-acp-start
          buffer working-dir
          (lambda (session-id)
-           (kimi-code-ide--render-in-buffer 'session-ready session-id)
-           (kimi-code-ide-log "Kimi Code started in %s (session: %s)"
+           (kimi-code-ide--render-in-buffer
+            (if resuming-p 'session-resumed 'session-ready) session-id)
+           (kimi-code-ide-log "Kimi Code %s in %s (session: %s)"
+                              (if resuming-p "resumed" "started")
                               (file-name-nondirectory (directory-file-name working-dir))
                               session-id)))))))
 
@@ -589,14 +772,84 @@ Can be either `vterm' or `eat'."
   (interactive)
   (kimi-code-ide--start-session))
 
+(defun kimi-code-ide--render-history-turns-into-buffer (buffer turns)
+  "Render TURNS into BUFFER as org-mode headings."
+  (with-current-buffer buffer
+    (let ((inhibit-read-only t))
+      (goto-char (point-max))
+      (dolist (turn turns)
+        (let ((user-text (car turn))
+              (assistant-text (cdr turn)))
+          (when (> (length user-text) 0)
+            (kimi-code-ide--insert-read-only "* You\n")
+            (kimi-code-ide--insert-read-only (kimi-code-ide--markdown-to-org user-text))
+            (kimi-code-ide--insert-read-only "\n-----\n\n"))
+          (when (> (length assistant-text) 0)
+            (kimi-code-ide--insert-read-only "* Kimi\n")
+            (kimi-code-ide--insert-read-only (kimi-code-ide--markdown-to-org assistant-text))
+            (kimi-code-ide--insert-read-only "\n\n")))))))
+
+(defun kimi-code-ide--buffer-has-history-p ()
+  "Return non-nil if the current buffer already contains conversation turns."
+  (save-excursion
+    (goto-char (point-min))
+    (re-search-forward "^\\* You\\(?:[ \t]\\|$\\)" nil t)))
+
+;;;###autoload
+(defun kimi-code-ide-resume ()
+  "Resume the Kimi Code conversation for the current project."
+  (interactive)
+  (let* ((working-dir (kimi-code-ide--get-working-directory))
+         (buffer-name (kimi-code-ide--get-buffer-name working-dir))
+         (buffer (get-buffer buffer-name))
+         (disk-turns (kimi-code-ide--read-kimi-session-turns working-dir))
+         (session (kimi-code-ide-acp--get-session-for-project working-dir))
+         (session-active (and session (kimi-code-ide-acp-session-initialized session))))
+    ;; Ensure disk history is visible in the buffer if it lacks conversation turns
+    (when disk-turns
+      (unless (and buffer (buffer-live-p buffer))
+        (setq buffer (get-buffer-create buffer-name))
+        (with-current-buffer buffer
+          (kimi-code-ide-mode)
+          (setq kimi-code-ide--project-dir working-dir)
+          (add-hook 'kill-buffer-hook
+                    (lambda ()
+                      (kimi-code-ide--cleanup-on-exit working-dir))
+                    nil t)))
+      (with-current-buffer buffer
+        (unless (kimi-code-ide--buffer-has-history-p)
+          (kimi-code-ide--render-history-turns-into-buffer buffer disk-turns))))
+    ;; Only queue pending history when the session is NOT already active
+    (unless session-active
+      (let ((history-string (or (kimi-code-ide--format-session-turns disk-turns)
+                                (and buffer (buffer-live-p buffer)
+                                     (kimi-code-ide--extract-conversation-history buffer)))))
+        (when history-string
+          (puthash working-dir history-string kimi-code-ide--pending-resume-history))))
+    (if session-active
+        (when (and buffer (buffer-live-p buffer))
+          (kimi-code-ide--display-buffer-in-side-window buffer))
+      (kimi-code-ide--start-session t))))
+
 ;;;###autoload
 (defun kimi-code-ide-stop ()
-  "Stop the Kimi Code session for the current project or directory."
+  "Stop the Kimi Code ACP session for the current project.
+The conversation buffer is kept so you can resume later with
+`kimi-code-ide-resume'."
+  (interactive)
+  (let ((working-dir (kimi-code-ide--get-working-directory)))
+    (kimi-code-ide--cleanup-acp working-dir)
+    (kimi-code-ide-log "Stopped Kimi Code in %s (buffer kept for resume)"
+                       (file-name-nondirectory (directory-file-name working-dir)))))
+
+;;;###autoload
+(defun kimi-code-ide-kill ()
+  "Stop the Kimi Code session and kill its buffers."
   (interactive)
   (let* ((working-dir (kimi-code-ide--get-working-directory))
          (buffer-name (kimi-code-ide--get-buffer-name))
          (input-buffer-name (kimi-code-ide--get-input-buffer-name working-dir)))
-    (kimi-code-ide-acp-stop working-dir)
+    (kimi-code-ide--cleanup-acp working-dir)
     (when-let ((buffer (get-buffer buffer-name)))
       (when (buffer-live-p buffer)
         (with-current-buffer buffer
@@ -607,7 +860,7 @@ Can be either `vterm' or `eat'."
         (with-current-buffer input-buffer
           (let (kill-buffer-hook kill-buffer-query-functions)
             (kill-buffer input-buffer)))))
-    (kimi-code-ide-log "Stopped Kimi Code in %s"
+    (kimi-code-ide-log "Killed Kimi Code session in %s"
                        (file-name-nondirectory (directory-file-name working-dir)))))
 
 ;;;###autoload
@@ -658,10 +911,15 @@ When called programmatically, sends the given PROMPT string."
          (buffer (get-buffer buffer-name)))
     (unless (and buffer (buffer-live-p buffer))
       (user-error "No Kimi Code session for this project.  Use M-x kimi-code-ide to start one"))
-    (let ((prompt-to-send (or prompt (read-string "Kimi prompt: "))))
-      (when (not (string-empty-p prompt-to-send))
+    (let* ((display-prompt (or prompt (read-string "Kimi prompt: ")))
+           (prompt-to-send display-prompt))
+      (when (not (string-empty-p display-prompt))
+        (let ((pending (gethash working-dir kimi-code-ide--pending-resume-history)))
+          (when pending
+            (setq prompt-to-send (concat pending display-prompt))
+            (remhash working-dir kimi-code-ide--pending-resume-history)))
         (with-current-buffer buffer
-          (kimi-code-ide--render-in-buffer 'user-prompt prompt-to-send))
+          (kimi-code-ide--render-in-buffer 'user-prompt display-prompt))
         (kimi-code-ide-acp--send-prompt working-dir prompt-to-send)
         (kimi-code-ide-debug "Sent prompt to Kimi: %s" prompt-to-send)))))
 

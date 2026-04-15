@@ -31,6 +31,7 @@
 ;; Declare functions from other files
 (declare-function kimi-code-ide "kimi-code-ide" ())
 (declare-function kimi-code-ide-stop "kimi-code-ide" ())
+(declare-function kimi-code-ide-resume "kimi-code-ide" ())
 (declare-function kimi-code-ide-list-sessions "kimi-code-ide" ())
 (declare-function kimi-code-ide-switch-to-buffer "kimi-code-ide" ())
 (declare-function kimi-code-ide-send-prompt "kimi-code-ide" (&optional prompt))
@@ -243,6 +244,7 @@
   ["Kimi Code IDE"
    ["Session Management"
     ("s" kimi-code-ide--start-if-no-session :description kimi-code-ide--start-description)
+    ("r" "Resume session" kimi-code-ide-resume)
     ("q" "Stop current session" kimi-code-ide-stop)
     ("l" "List all sessions" kimi-code-ide-list-sessions)]
    ["Navigation"

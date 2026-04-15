@@ -606,6 +606,9 @@ Call ON-READY with the session-id when the session is ready for prompts."
   "Stop the ACP session for PROJECT-DIR."
   (when-let ((session (gethash project-dir kimi-code-ide-acp--sessions)))
     (when-let ((client (kimi-code-ide-acp-session-client session)))
+      ;; Prevent the process sentinel from killing buffers on intentional stop
+      (when-let ((process (map-elt client :process)))
+        (set-process-sentinel process nil))
       (condition-case err
           (acp-shutdown :client client)
         (error (kimi-code-ide-debug "Error shutting down ACP client: %s" err))))

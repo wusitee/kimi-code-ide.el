@@ -52,7 +52,7 @@
 (ert-deftest kimi-code-ide-test-working-directory ()
   "Test working directory detection."
   (let ((default-directory "/tmp/"))
-    (should (string= (kimi-code-ide--get-working-directory) "/tmp/"))))
+    (should (string= (kimi-code-ide--get-working-directory) "/tmp"))))
 
 ;;; ACP Client Tests
 
@@ -138,6 +138,59 @@
     (puthash test-dir "session-123" kimi-code-ide--session-ids)
     (remhash test-dir kimi-code-ide--session-ids)
     (should (not (gethash test-dir kimi-code-ide--session-ids)))))
+
+;;; Resume Tests
+
+(ert-deftest kimi-code-ide-test-buffer-has-history-p ()
+  "Test detection of existing conversation history in buffer."
+  (with-temp-buffer
+    (rename-buffer "*kimi-test-history*" t)
+    (kimi-code-ide-mode)
+    (should (not (kimi-code-ide--buffer-has-history-p)))
+    (insert "* Kimi Code IDE — test\n\n")
+    (should (not (kimi-code-ide--buffer-has-history-p)))
+    (insert "* You\nHello\n")
+    (should (kimi-code-ide--buffer-has-history-p))))
+
+(ert-deftest kimi-code-ide-test-pending-resume-history-project-scoped ()
+  "Test that pending resume history is scoped per project."
+  (puthash "/tmp/project-a" "history A" kimi-code-ide--pending-resume-history)
+  (puthash "/tmp/project-b" "history B" kimi-code-ide--pending-resume-history)
+  (should (string= (gethash "/tmp/project-a" kimi-code-ide--pending-resume-history) "history A"))
+  (should (string= (gethash "/tmp/project-b" kimi-code-ide--pending-resume-history) "history B"))
+  (remhash "/tmp/project-a" kimi-code-ide--pending-resume-history)
+  (remhash "/tmp/project-b" kimi-code-ide--pending-resume-history))
+
+(ert-deftest kimi-code-ide-test-parse-context-jsonl-multiline ()
+  "Test parsing of multi-line JSONL context files."
+  (let ((file (make-temp-file "kimi-context-" nil ".jsonl")))
+    (with-temp-file file
+      (insert "{\"role\":\"user\",\"content\":\"hello\"}\n")
+      (insert "{\n  \"role\": \"assistant\",\n  \"content\": \"world\"\n}\n")
+      (insert "{\"role\":\"user\",\"content\":\"foo\"}\n")
+      (insert "{\"role\":\"assistant\",\"content\":\"bar\"}\n"))
+    (let ((turns (kimi-code-ide--parse-context-jsonl file)))
+      (should (= (length turns) 2))
+      (should (string= (caar turns) "hello"))
+      (should (string= (cdar turns) "world"))
+      (should (string= (caadr turns) "foo"))
+      (should (string= (cdadr turns) "bar")))
+    (delete-file file)))
+
+(ert-deftest kimi-code-ide-test-parse-context-jsonl-tool-string ()
+  "Test that plain string tool results are included in parsed turns."
+  (let ((file (make-temp-file "kimi-context-" nil ".jsonl")))
+    (with-temp-file file
+      (insert "{\"role\":\"user\",\"content\":\"search\"}\n")
+      (insert "{\"role\":\"assistant\",\"content\":\"Let me search.\"}\n")
+      (insert "{\"role\":\"tool\",\"content\":\"Search result: Emacs\"}\n")
+      (insert "{\"role\":\"assistant\",\"content\":\"Here is the result.\"}\n"))
+    (let ((turns (kimi-code-ide--parse-context-jsonl file)))
+      (should (= (length turns) 1))
+      (should (string= (caar turns) "search"))
+      (should (string-match-p "Search result: Emacs" (cdar turns)))
+      (should (string-match-p "Here is the result." (cdar turns))))
+    (delete-file file)))
 
 ;;; Test Runner
 
