@@ -1,0 +1,172 @@
+#+TITLE: Kimi Code IDE for Emacs
+#+AUTHOR: Kimi Code IDE Contributors
+#+DESCRIPTION: Kimi Code integration for Emacs via ACP
+#+KEYWORDS: emacs, kimi, ai, code-assistant, acp
+#+OPTIONS: toc:t num:nil
+
+[[https://www.gnu.org/software/emacs/][file:https://img.shields.io/badge/GNU%20Emacs-28--30-blueviolet.svg]]
+[[https://www.gnu.org/licenses/gpl-3.0][file:https://img.shields.io/badge/License-GPL%20v3-blue.svg]]
+
+* ⚠️ Warning / Disclaimer
+
+This package was primarily *vibe coded* (generated with AI assistance) and has *not* been thoroughly reviewed or battle-tested. It may contain bugs, edge cases, or security issues. Use it at your own risk. Contributions and code reviews are very welcome!
+
+* Overview
+
+Kimi Code IDE for Emacs provides native integration with [[https://www.kimi.com/code/docs/en/][Kimi Code CLI]] through the [[https://agentclientprotocol.com/][Agent Client Protocol (ACP)]]. Unlike simple terminal wrappers, this package creates a bidirectional bridge between Kimi and Emacs, enabling Kimi to understand and leverage Emacs' powerful features — from LSP and project management to custom Elisp functions. This transforms Kimi into a true Emacs-aware AI assistant that works within your existing workflow.
+
+** Features
+
+- Automatic project detection and session management
+- ACP protocol implementation for IDE integration
+- File operations via ACP client methods
+- Tool support for editor state and workspace info
+- Extensible MCP tools server for accessing Emacs commands (xref, tree-sitter, project info, etc.)
+- Diagnostic integration with Flycheck and Flymake
+- Advanced diff view with ediff integration
+- Selection and buffer tracking for better context awareness
+
+** Emacs Tool Integration
+
+This package enables Kimi Code to leverage the full power of Emacs through MCP tools integration. Kimi can directly access and utilize Emacs capabilities including:
+
+- *Language Server Protocol (LSP)* integration through xref commands for intelligent code navigation (eglot, lsp-mode and others)
+- *Tree-sitter* for syntax tree analysis and understanding code structure at the AST level
+- *Imenu* for structured symbol listing and navigation within files
+- *Project* integration for project-aware operations
+- *Any Emacs command or function* can be exposed as an MCP tool
+
+* Prerequisites
+
+- Emacs 28.1 or higher
+- [[https://www.kimi.com/code/docs/en/][Kimi Code CLI]] installed and available in PATH
+- =acp.el= package (ACP implementation for Emacs)
+- =transient= package (for the menu interface)
+- =web-server= package (for MCP tools server, optional)
+
+* Installation
+
+** Installing Kimi Code CLI
+
+Follow the installation instructions at [[https://www.kimi.com/code/docs/en/][Kimi Code Documentation]].
+
+Verify installation:
+
+#+begin_src bash
+  kimi info
+#+end_src
+
+** Installing the Emacs Package
+
+To install using =emacs-version= >= 30 and =use-package= with the =vc= binding:
+
+#+begin_src elisp
+  (use-package kimi-code-ide
+    :vc (:url "https://github.com/wusitee/kimi-code-ide.el" :rev :newest)
+    :bind ("C-c C-k" . kimi-code-ide-menu)
+    :config
+    (kimi-code-ide-tools-setup))
+#+end_src
+
+To install using =use-package= and [[https://github.com/raxod502/straight.el][straight.el]]:
+
+#+begin_src emacs-lisp
+  (use-package kimi-code-ide
+    :straight (:type git :host github :repo "wusitee/kimi-code-ide.el")
+    :bind ("C-c C-k" . kimi-code-ide-menu)
+    :config
+    (kimi-code-ide-tools-setup))
+#+end_src
+
+** Installing on Doom Emacs
+
+Add to =packages.el=:
+
+#+begin_src emacs-lisp
+(package! kimi-code-ide
+  :recipe (:host github :repo "wusitee/kimi-code-ide.el"))
+#+end_src
+
+Add to =config.el=:
+
+#+begin_src emacs-lisp
+(use-package! kimi-code-ide
+  :bind ("C-c C-k" . kimi-code-ide-menu)
+  :config
+  (kimi-code-ide-tools-setup))
+#+end_src
+
+Then run =doom sync= and restart Emacs.
+
+* Usage
+
+** Basic Commands
+
+The easiest way to interact with Kimi Code IDE is through the transient menu interface. Simply run =M-x kimi-code-ide-menu= to open the interactive menu.
+
+| Command                                 | Description                                       |
+|-----------------------------------------+---------------------------------------------------|
+| =M-x kimi-code-ide-menu=                  | Open transient menu with all Kimi Code commands   |
+| =M-x kimi-code-ide-tools-setup=           | Set up built-in Emacs tools (e.g. xref, project)  |
+| =M-x kimi-code-ide=                       | Start Kimi Code for the current project           |
+| =M-x kimi-code-ide-send-prompt=           | Send prompt to Kimi from minibuffer input         |
+| =M-x kimi-code-ide-cancel-prompt=         | Cancel the current prompt turn                    |
+| =M-x kimi-code-ide-stop=                  | Stop Kimi Code for the current project            |
+| =M-x kimi-code-ide-switch-to-buffer=      | Switch to project's Kimi buffer                   |
+| =M-x kimi-code-ide-list-sessions=         | List all active Kimi Code sessions and switch     |
+| =M-x kimi-code-ide-toggle=                | Toggle visibility of Kimi Code window             |
+| =M-x kimi-code-ide-toggle-recent=         | Toggle most recent Kimi window globally           |
+| =M-x kimi-code-ide-show-debug=            | Show the debug buffer                             |
+| =M-x kimi-code-ide-clear-debug=           | Clear the debug buffer                            |
+
+** Multi-Project Support
+
+Kimi Code IDE automatically detects your project using Emacs' built-in =project.el=. Each project gets its own Kimi Code instance with a unique buffer name like =*kimi-code[project-name]*=.
+
+You can run multiple Kimi Code instances simultaneously for different projects. Use =kimi-code-ide-list-sessions= to see all active sessions and switch between them.
+
+** Window Management
+
+- Running =kimi-code-ide= when a session is already active will toggle the window visibility
+- The window can be closed with standard Emacs window commands (=C-x 0=) without stopping Kimi
+- Use =kimi-code-ide-toggle-recent= to toggle the most recent Kimi window from anywhere
+
+** Diff Viewing with Ediff
+
+When =kimi-code-ide-use-ide-diff= is enabled (default), Kimi's code suggestions are displayed using Emacs' powerful =ediff= interface.
+
+** Configuration Variables
+
+| Variable                                      | Description                                 | Default                              |
+|-----------------------------------------------+---------------------------------------------+--------------------------------------|
+| ~kimi-code-ide-cli-path~                        | Path to Kimi Code CLI                     | ~"kimi"~                               |
+| ~kimi-code-ide-buffer-name-function~            | Function for buffer naming                | ~kimi-code-ide--default-buffer-name~   |
+| ~kimi-code-ide-cli-debug~                       | Enable CLI debug mode                     | ~nil~                                  |
+| ~kimi-code-ide-cli-extra-flags~                 | Additional CLI flags                      | ~""~                                   |
+| ~kimi-code-ide-debug~                           | Enable debug logging                        | ~nil~                                  |
+| ~kimi-code-ide-window-side~                     | Side for Kimi window                      | ~'right~                               |
+| ~kimi-code-ide-window-width~                    | Body width for side windows               | ~100~                                  |
+| ~kimi-code-ide-window-height~                   | Height for top/bottom windows             | ~20~                                   |
+| ~kimi-code-ide-focus-on-open~                   | Focus Kimi window when opened             | ~t~                                    |
+| ~kimi-code-ide-use-ide-diff~                    | Use IDE diff viewer                       | ~t~                                    |
+| ~kimi-code-ide-use-side-window~                 | Use side window vs regular buffer         | ~t~                                    |
+| ~kimi-code-ide-system-prompt~                   | Custom system prompt to append            | ~nil~                                  |
+
+* Architecture
+
+This package is structured similarly to =claude-code-ide.el= but uses ACP instead of MCP-over-WebSocket:
+
+- =kimi-code-ide.el= — Main entry point, UI buffer management, session commands
+- =kimi-code-ide-acp.el= — ACP integration layer (wraps =acp.el=)
+- =kimi-code-ide-handlers.el= — Client method handlers and diff viewing
+- =kimi-code-ide-tools.el= — Emacs tool definitions (xref, project, imenu, treesit)
+- =kimi-code-ide-tools-server.el= — HTTP-based MCP tools server framework
+- =kimi-code-ide-tools-http.el= — HTTP transport for tools server
+- =kimi-code-ide-diagnostics.el= — Flycheck/Flymake integration
+- =kimi-code-ide-transient.el= — Transient menu interface
+- =kimi-code-ide-debug.el= — Debug logging utilities
+- =kimi-code-ide-tests.el= — ERT test suite
+
+* License
+
+This project is licensed under the GNU General Public License v3.0 or later. See the LICENSE file for details.
