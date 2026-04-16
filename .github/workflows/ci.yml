@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        emacs-version:
+          - 30.1
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Emacs
+        uses: purcell/setup-emacs@master
+        with:
+          version: ${{ matrix.emacs-version }}
+
+      - name: Create dependency stubs
+        run: |
+          cat > ci-stub.el <<'EOF'
+          (unless (locate-library "acp")
+            (provide 'acp)
+            (defun acp-make-client (&rest _))
+            (defun acp--client-started-p (&rest _) nil)
+            (defun acp--start-client (&rest _))
+            (defun acp-subscribe-to-notifications (&rest _))
+            (defun acp-subscribe-to-requests (&rest _))
+            (defun acp-subscribe-to-errors (&rest _))
+            (defun acp-make-initialize-request (&rest _) nil)
+            (defun acp-make-session-new-request (&rest _) nil)
+            (defun acp-send-request (&rest _) nil)
+            (defun acp-send-notification (&rest _) nil)
+            (defun acp-send-response (&rest _) nil)
+            (defun acp-make-session-prompt-request (&rest _) nil)
+            (defun acp-make-session-cancel-notification (&rest _) nil)
+            (defun acp-make-error (&rest _) nil)
+            (defun acp-make-fs-read-text-file-response (&rest _) nil)
+            (defun acp-make-fs-write-text-file-response (&rest _) nil)
+            (defun acp-make-session-request-permission-response (&rest _) nil)
+            (defun acp-shutdown (&rest _) nil))
+          (unless (locate-library "transient")
+            (provide 'transient)
+            (defmacro transient-define-suffix (name arglist &rest body)
+              (list 'defun name arglist body))
+            (defmacro transient-define-prefix (name &rest args)
+              (list 'defun name () '(interactive))))
+          EOF
+
+      - name: Byte-compile
+        run: |
+          emacs -batch -L . -l ci-stub.el \
+            --eval "(setq byte-compile-error-on-warn t)" \
+            -f batch-byte-compile kimi-code-ide*.el
+
+      - name: Run ERT tests
+        run: |
+          emacs -batch -L . -l ci-stub.el -l ert -l kimi-code-ide-tests.el -f ert-run-tests-batch-and-exit
