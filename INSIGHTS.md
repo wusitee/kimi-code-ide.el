@@ -72,3 +72,14 @@ This file captures hard-won lessons from debugging and evolving the package. Fut
 **Fix:** Replace `(forward-line 1)` with `(skip-chars-forward " \t\n\r")` and let `json-parse-buffer` advance point naturally. On parse error, jump to `(point-max)` to avoid infinite loops.
 
 **Lesson:** JSONL is "one object per line" by convention, but not guaranteed. Defensive parsing should tolerate whitespace and recover from malformed objects.
+
+---
+
+## CI & Batch Testing Stubs
+
+### 8. Test-file stubs must stay in sync with CI stubs
+**What happened:** `kimi-code-ide-tests.el` contained an `eval-and-compile` stub for the `acp` package so tests could run in CI without the real dependency. The CI workflow (`ci.yml`) also generated an inline `ci-stub.el` with the same functions. Over time, the test file stub drifted: it was missing `acp-make-session-request-permission-response`, which had been added to the CI stub and was actively used in `kimi-code-ide-acp.el`. This meant local batch test runs (without `ci-stub.el` loaded) could fail with a `void-function` error.
+
+**Fix:** Add the missing `acp-make-session-request-permission-response` definition to the test file stub, keeping it identical in coverage to the CI stub.
+
+**Lesson:** Whenever a new `acp` function is introduced in the codebase, update *both* the test file stub (`kimi-code-ide-tests.el`) and the CI stub (`.github/workflows/ci.yml`) in the same commit. Treat them as a matched pair.

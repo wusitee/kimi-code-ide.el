@@ -25,6 +25,29 @@
 
 ;;; Code:
 
+;; Stub acp package for batch testing when the real dependency is unavailable
+(eval-and-compile
+  (unless (locate-library "acp")
+    (provide 'acp)
+    (defun acp-make-client (&rest _))
+    (defun acp--client-started-p (&rest _) nil)
+    (defun acp--start-client (&rest _))
+    (defun acp-subscribe-to-notifications (&rest _))
+    (defun acp-subscribe-to-requests (&rest _))
+    (defun acp-subscribe-to-errors (&rest _))
+    (defun acp-make-initialize-request (&rest _) nil)
+    (defun acp-make-session-new-request (&rest _) nil)
+    (defun acp-send-request (&rest _) nil)
+    (defun acp-send-notification (&rest _) nil)
+    (defun acp-send-response (&rest _) nil)
+    (defun acp-make-session-prompt-request (&rest _) nil)
+    (defun acp-make-session-cancel-notification (&rest _) nil)
+    (defun acp-make-error (&rest _) nil)
+    (defun acp-make-fs-read-text-file-response (&rest _) nil)
+    (defun acp-make-fs-write-text-file-response (&rest _) nil)
+    (defun acp-make-session-request-permission-response (&rest _) nil)
+    (defun acp-shutdown (&rest _) nil)))
+
 (require 'ert)
 (require 'kimi-code-ide)
 (require 'kimi-code-ide-acp)
