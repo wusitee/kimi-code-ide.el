@@ -190,6 +190,46 @@ Can be either `vterm' or `eat'."
 (defvar kimi-code-ide--cleanup-in-progress nil
   "Flag to prevent recursive cleanup calls.")
 
+(defvar kimi-code-ide-slash-commands
+  '(("/help" . (:fn kimi-code-ide-slash-help :desc "Display help information"))
+    ("/version" . (:fn kimi-code-ide-send-prompt :desc "Display version number"))
+    ("/changelog" . (:fn kimi-code-ide-send-prompt :desc "Display the changelog"))
+    ("/feedback" . (:fn kimi-code-ide-send-prompt :desc "Submit feedback"))
+    ("/login" . (:fn kimi-code-ide-send-prompt :desc "Log in or configure API platform"))
+    ("/logout" . (:fn kimi-code-ide-send-prompt :desc "Log out from current platform"))
+    ("/model" . (:fn kimi-code-ide-send-prompt :desc "Switch models and thinking mode"))
+    ("/editor" . (:fn kimi-code-ide-send-prompt :desc "Set the external editor"))
+    ("/theme" . (:fn kimi-code-ide-send-prompt :desc "Switch the terminal color theme"))
+    ("/reload" . (:fn kimi-code-ide-send-prompt :desc "Reload configuration file"))
+    ("/debug" . (:fn kimi-code-ide-send-prompt :desc "Display debug information"))
+    ("/usage" . (:fn kimi-code-ide-send-prompt :desc "Display API usage and quota"))
+    ("/mcp" . (:fn kimi-code-ide-send-prompt :desc "Display connected MCP servers"))
+    ("/hooks" . (:fn kimi-code-ide-send-prompt :desc "Display configured hooks"))
+    ("/new" . (:fn kimi-code-ide :desc "Open Kimi Code IDE or reuse the current session"))
+    ("/sessions" . (:fn kimi-code-ide-list-sessions :desc "List and switch sessions"))
+    ("/title" . (:fn kimi-code-ide-send-prompt :desc "View or set session title"))
+    ("/undo" . (:fn kimi-code-ide-send-prompt :desc "Roll back to previous turn"))
+    ("/fork" . (:fn kimi-code-ide-send-prompt :desc "Fork session with history"))
+    ("/export" . (:fn kimi-code-ide-send-prompt :desc "Export session to Markdown"))
+    ("/import" . (:fn kimi-code-ide-resume :desc "Import/resume from context.jsonl"))
+    ("/clear" . (:fn kimi-code-ide--clear-conversation :desc "Clear conversation buffer"))
+    ("/compact" . (:fn kimi-code-ide-send-prompt :desc "Compact context manually"))
+    ("/skill:" . (:fn kimi-code-ide-send-prompt :desc "Load a specific skill"))
+    ("/flow:" . (:fn kimi-code-ide-send-prompt :desc "Execute a flow skill"))
+    ("/add-dir" . (:fn kimi-code-ide-send-prompt :desc "Add directory to workspace"))
+    ("/btw" . (:fn kimi-code-ide-send-prompt :desc "Ask a side question"))
+    ("/init" . (:fn kimi-code-ide-send-prompt :desc "Analyze project and generate AGENTS.md"))
+    ("/plan" . (:fn kimi-code-ide-send-prompt :desc "Toggle plan mode"))
+    ("/task" . (:fn kimi-code-ide-send-prompt :desc "Open interactive task browser"))
+    ("/yolo" . (:fn kimi-code-ide-send-prompt :desc "Toggle YOLO mode"))
+    ("/web" . (:fn kimi-code-ide-send-prompt :desc "Switch to Web UI"))
+    ("/vis" . (:fn kimi-code-ide-send-prompt :desc "Switch to Agent Tracing Visualizer"))
+    ("/stop" . (:fn kimi-code-ide-stop :desc "Stop the current session"))
+    ("/cancel" . (:fn kimi-code-ide-cancel-prompt :desc "Cancel current prompt")))
+  "Alist of slash command names to their metadata.
+Each value is a plist with :fn (the function to call) and :desc
+(description for completion annotations).")
+
 ;;; Helper Functions
 
 (defun kimi-code-ide--default-buffer-name (directory)
@@ -428,6 +468,59 @@ Trailing slash is stripped to match Kimi CLI's path normalization."
       (set-window-dedicated-p conv-window t))
     conv-window))
 
+;;;###autoload
+(defun kimi-code-ide--clear-conversation ()
+  "Clear the conversation buffer for the current project."
+  (interactive)
+  (let* ((working-dir (kimi-code-ide--get-working-directory))
+         (buffer (get-buffer (kimi-code-ide--get-buffer-name working-dir))))
+    (when (and buffer (buffer-live-p buffer))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (kimi-code-ide--render-welcome working-dir))))
+    (kimi-code-ide-log "Cleared conversation buffer")))
+
+;;;###autoload
+(defun kimi-code-ide-slash-help ()
+  "Show available slash commands in a temporary buffer."
+  (interactive)
+  (let ((commands (mapcar (lambda (entry)
+                            (format "  %s — %s"
+                                    (car entry)
+                                    (plist-get (cdr entry) :desc)))
+                          kimi-code-ide-slash-commands)))
+    (with-output-to-temp-buffer "*Kimi Code Slash Commands*"
+      (princ "Available slash commands:\n\n")
+      (princ (string-join commands "\n"))
+      (princ "\n"))))
+
+(defun kimi-code-ide--slash-completion-at-point ()
+  "Completion-at-point function for slash commands in input buffers.
+Returns a completion table when point is within the initial slash command."
+  (let ((bol-slash (save-excursion
+                     (beginning-of-line)
+                     (when (eq (char-after) ?/)
+                       (point)))))
+    (when bol-slash
+      (let* ((start (1+ bol-slash))
+             (end (save-excursion
+                    (goto-char start)
+                    (skip-chars-forward "^ \t\n")
+                    (point))))
+        (when (<= start (point) end)
+          (let ((candidates (mapcar (lambda (entry)
+                                      (propertize (substring (car entry) 1)
+                                                  'kimi-code-ide-slash-command entry))
+                                    kimi-code-ide-slash-commands)))
+            (list start end candidates
+                  :annotation-function
+                  (lambda (cand)
+                    (let* ((entry (get-text-property 0 'kimi-code-ide-slash-command cand))
+                           (desc (plist-get (cdr entry) :desc)))
+                      (format " — %s" desc)))
+                  :company-kind (lambda (_) 'command))))))))
+
 ;;; Buffer Rendering
 
 (defun kimi-code-ide--ensure-buffer (project-dir)
@@ -631,13 +724,33 @@ Trailing slash is stripped to match Kimi CLI's path normalization."
   :doc "Keymap for `kimi-code-ide-input-mode'."
   "C-c C-c" #'kimi-code-ide--submit-input-buffer
   "C-c C-p" #'kimi-code-ide-send-prompt
-  "C-c C-q" #'kimi-code-ide-stop)
+  "C-c C-q" #'kimi-code-ide-stop
+  "M-TAB" #'completion-at-point)
 
 (define-derived-mode kimi-code-ide-input-mode text-mode "Kimi Input"
   "Major mode for Kimi Code IDE input buffers."
   (setq-local truncate-lines nil)
   (setq-local word-wrap t)
-  (setq-local cursor-type 'bar))
+  (setq-local cursor-type 'bar)
+  ;; Slash command completion
+  (add-hook 'completion-at-point-functions #'kimi-code-ide--slash-completion-at-point nil t)
+  ;; Corfu configuration (graceful if not yet loaded)
+  (when (boundp 'corfu-auto)
+    (setq-local corfu-auto t)
+    (setq-local corfu-auto-prefix 1))
+  (when (boundp 'corfu-quit-at-boundary)
+    (setq-local corfu-quit-at-boundary t))
+  (when (boundp 'corfu-quit-no-match)
+    (setq-local corfu-quit-no-match t))
+  ;; Orderless configuration for this buffer
+  (when (boundp 'completion-styles)
+    (setq-local completion-styles
+                (if (and (boundp 'completion-styles-alist)
+                         (assoc 'orderless completion-styles-alist))
+                    '(orderless basic)
+                  '(basic))))
+  (when (boundp 'completion-category-overrides)
+    (setq-local completion-category-overrides '((file (styles . (partial-completion)))))))
 
 (define-derived-mode kimi-code-ide-mode org-mode "Kimi Code"
   "Major mode for Kimi Code IDE conversation buffers."
@@ -649,7 +762,9 @@ Trailing slash is stripped to match Kimi CLI's path normalization."
     (setq-local org-ctrl-k-protect-subtree nil)))
 
 (defun kimi-code-ide--submit-input-buffer ()
-  "Submit the contents of the current input buffer as a prompt."
+  "Submit the contents of the current input buffer as a prompt.
+If the buffer contains a known slash command, execute its associated
+action instead of sending it to Kimi."
   (interactive)
   (unless kimi-code-ide--input-project-dir
     (user-error "Not in a Kimi Code input buffer"))
@@ -657,10 +772,18 @@ Trailing slash is stripped to match Kimi CLI's path normalization."
     (when (string-empty-p input)
       (erase-buffer)
       (user-error "Empty prompt"))
-    (let ((project-dir kimi-code-ide--input-project-dir))
+    (let ((project-dir kimi-code-ide--input-project-dir)
+          (command (assoc input kimi-code-ide-slash-commands)))
       (erase-buffer)
-      (let ((default-directory project-dir))
-        (kimi-code-ide-send-prompt input)))))
+      (if command
+          (let ((fn (plist-get (cdr command) :fn)))
+            (kimi-code-ide-debug "Executing slash command: %s" input)
+            (let ((default-directory project-dir))
+              (if (eq fn 'kimi-code-ide-send-prompt)
+                  (kimi-code-ide-send-prompt input)
+                (call-interactively fn))))
+        (let ((default-directory project-dir))
+          (kimi-code-ide-send-prompt input))))))
 
 ;;; CLI Detection
 
