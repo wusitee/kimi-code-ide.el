@@ -121,13 +121,41 @@ The easiest way to interact with Kimi Code IDE is through the transient menu int
 | =M-x kimi-code-ide-toggle-recent=         | Toggle most recent Kimi window globally           |
 | =M-x kimi-code-ide-show-debug=            | Show the debug buffer                             |
 | =M-x kimi-code-ide-clear-debug=           | Clear the debug buffer                            |
-| =\\init=                                    | Start a new session (input buffer slash command)  |
-| =\\stop=                                    | Stop the current session                          |
-| =\\resume=                                  | Resume a session                                  |
-| =\\clear=                                   | Clear the conversation buffer                     |
-| =\\cancel=                                  | Cancel current prompt                             |
-| =\\import=                                  | Import/resume from context.jsonl                  |
-| =\\help=                                    | Show available slash commands                     |
+| =/help=                                    | Display help information                          |
+| =/new=                                     | Create a new session                              |
+| =/sessions=                                | List and switch sessions                          |
+| =/clear=                                   | Clear session context                             |
+| =/cancel=                                  | Cancel current prompt                             |
+| =/stop=                                    | Stop the current session                          |
+| =/import=                                  | Import/resume from context.jsonl                  |
+| =/init=                                    | Analyze project and generate AGENTS.md            |
+| =/plan=                                    | Toggle plan mode                                  |
+| =/yolo=                                    | Toggle YOLO mode                                  |
+| =/export=                                  | Export session to Markdown                        |
+| =/title=                                   | View or set session title                         |
+| =/undo=                                    | Roll back to previous turn                        |
+| =/fork=                                    | Fork session with history                         |
+| =/compact=                                 | Compact context manually                          |
+| =/model=                                   | Switch models and thinking mode                   |
+| =/debug=                                   | Display debug information                         |
+| =/usage=                                   | Display API usage and quota                       |
+| =/mcp=                                     | Display connected MCP servers                     |
+| =/hooks=                                   | Display configured hooks                          |
+| =/add-dir=                                 | Add directory to workspace                        |
+| =/btw=                                     | Ask a side question                               |
+| =/task=                                    | Open interactive task browser                     |
+| =/skill:=                                  | Load a specific skill                             |
+| =/flow:=                                   | Execute a flow skill                              |
+| =/web=                                     | Switch to Web UI                                  |
+| =/vis=                                     | Switch to Agent Tracing Visualizer                |
+| =/login=                                   | Log in or configure API platform                  |
+| =/logout=                                  | Log out from current platform                     |
+| =/editor=                                  | Set the external editor                           |
+| =/theme=                                   | Switch the terminal color theme                   |
+| =/reload=                                  | Reload configuration file                         |
+| =/version=                                 | Display version number                            |
+| =/changelog=                               | Display the changelog                             |
+| =/feedback=                                | Submit feedback                                   |
 
 ** Multi-Project Support
 

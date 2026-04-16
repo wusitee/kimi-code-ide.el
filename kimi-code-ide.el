@@ -191,13 +191,41 @@ Can be either `vterm' or `eat'."
   "Flag to prevent recursive cleanup calls.")
 
 (defvar kimi-code-ide-slash-commands
-  '(("\\init" . (:fn kimi-code-ide :desc "Start a new Kimi Code session"))
-    ("\\stop" . (:fn kimi-code-ide-stop :desc "Stop the current session"))
-    ("\\resume" . (:fn kimi-code-ide-resume :desc "Resume a session"))
-    ("\\clear" . (:fn kimi-code-ide--clear-conversation :desc "Clear the conversation buffer"))
-    ("\\cancel" . (:fn kimi-code-ide-cancel-prompt :desc "Cancel current prompt"))
-    ("\\import" . (:fn kimi-code-ide-resume :desc "Import/resume from context.jsonl"))
-    ("\\help" . (:fn kimi-code-ide-slash-help :desc "Show available slash commands")))
+  '(("/help" . (:fn kimi-code-ide-slash-help :desc "Display help information"))
+    ("/version" . (:fn kimi-code-ide-send-prompt :desc "Display version number"))
+    ("/changelog" . (:fn kimi-code-ide-send-prompt :desc "Display the changelog"))
+    ("/feedback" . (:fn kimi-code-ide-send-prompt :desc "Submit feedback"))
+    ("/login" . (:fn kimi-code-ide-send-prompt :desc "Log in or configure API platform"))
+    ("/logout" . (:fn kimi-code-ide-send-prompt :desc "Log out from current platform"))
+    ("/model" . (:fn kimi-code-ide-send-prompt :desc "Switch models and thinking mode"))
+    ("/editor" . (:fn kimi-code-ide-send-prompt :desc "Set the external editor"))
+    ("/theme" . (:fn kimi-code-ide-send-prompt :desc "Switch the terminal color theme"))
+    ("/reload" . (:fn kimi-code-ide-send-prompt :desc "Reload configuration file"))
+    ("/debug" . (:fn kimi-code-ide-send-prompt :desc "Display debug information"))
+    ("/usage" . (:fn kimi-code-ide-send-prompt :desc "Display API usage and quota"))
+    ("/mcp" . (:fn kimi-code-ide-send-prompt :desc "Display connected MCP servers"))
+    ("/hooks" . (:fn kimi-code-ide-send-prompt :desc "Display configured hooks"))
+    ("/new" . (:fn kimi-code-ide :desc "Create a new session"))
+    ("/sessions" . (:fn kimi-code-ide-list-sessions :desc "List and switch sessions"))
+    ("/title" . (:fn kimi-code-ide-send-prompt :desc "View or set session title"))
+    ("/undo" . (:fn kimi-code-ide-send-prompt :desc "Roll back to previous turn"))
+    ("/fork" . (:fn kimi-code-ide-send-prompt :desc "Fork session with history"))
+    ("/export" . (:fn kimi-code-ide-send-prompt :desc "Export session to Markdown"))
+    ("/import" . (:fn kimi-code-ide-resume :desc "Import/resume from context.jsonl"))
+    ("/clear" . (:fn kimi-code-ide--clear-conversation :desc "Clear session context"))
+    ("/compact" . (:fn kimi-code-ide-send-prompt :desc "Compact context manually"))
+    ("/skill:" . (:fn kimi-code-ide-send-prompt :desc "Load a specific skill"))
+    ("/flow:" . (:fn kimi-code-ide-send-prompt :desc "Execute a flow skill"))
+    ("/add-dir" . (:fn kimi-code-ide-send-prompt :desc "Add directory to workspace"))
+    ("/btw" . (:fn kimi-code-ide-send-prompt :desc "Ask a side question"))
+    ("/init" . (:fn kimi-code-ide-send-prompt :desc "Analyze project and generate AGENTS.md"))
+    ("/plan" . (:fn kimi-code-ide-send-prompt :desc "Toggle plan mode"))
+    ("/task" . (:fn kimi-code-ide-send-prompt :desc "Open interactive task browser"))
+    ("/yolo" . (:fn kimi-code-ide-send-prompt :desc "Toggle YOLO mode"))
+    ("/web" . (:fn kimi-code-ide-send-prompt :desc "Switch to Web UI"))
+    ("/vis" . (:fn kimi-code-ide-send-prompt :desc "Switch to Agent Tracing Visualizer"))
+    ("/stop" . (:fn kimi-code-ide-stop :desc "Stop the current session"))
+    ("/cancel" . (:fn kimi-code-ide-cancel-prompt :desc "Cancel current prompt")))
   "Alist of slash command names to their metadata.
 Each value is a plist with :fn (the function to call) and :desc
 (description for completion annotations).")
@@ -467,10 +495,10 @@ Trailing slash is stripped to match Kimi CLI's path normalization."
 
 (defun kimi-code-ide--slash-completion-at-point ()
   "Completion-at-point function for slash commands in input buffers.
-Returns a completion table when the current line starts with \\ ."
+Returns a completion table when the current line starts with / ."
   (let ((bol-slash (save-excursion
                      (beginning-of-line)
-                     (when (eq (char-after) ?\\)
+                     (when (eq (char-after) ?/)
                        (point)))))
     (when bol-slash
       (let* ((start (1+ bol-slash))
@@ -741,7 +769,9 @@ action instead of sending it to Kimi."
           (let ((fn (plist-get (cdr command) :fn)))
             (kimi-code-ide-debug "Executing slash command: %s" input)
             (let ((default-directory project-dir))
-              (call-interactively fn)))
+              (if (eq fn 'kimi-code-ide-send-prompt)
+                  (kimi-code-ide-send-prompt input)
+                (call-interactively fn))))
         (let ((default-directory project-dir))
           (kimi-code-ide-send-prompt input))))))
 
