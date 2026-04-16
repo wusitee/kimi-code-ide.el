@@ -72,5 +72,7 @@ Optional runtime dependencies:
 ## Agent Policies (from `AGENTS.md`)
 
 - **GPG Signing**: Every commit must be GPG signed. Do not run `git commit` or `git push` without explicit user approval.
+- **Do Not Merge**: Never merge pull requests automatically. The user will merge manually.
 - **Autoload Cookies**: All `interactive` commands exposed via transient menus or keybindings must keep their `;;;###autoload` cookie intact. Never remove them from existing commands; add them to new user-facing interactive commands.
+- **No Coauthor**: Don't include Claude as a coauthor.
 - **Syntax Check & Review**: Before declaring any editing task complete, byte-compile modified files and review every changed line for missing parentheses, unbalanced quotes, incorrect function names, missing `require` forms, and accidentally deleted code (including `;;;###autoload` cookies).
