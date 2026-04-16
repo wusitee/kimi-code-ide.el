@@ -58,7 +58,7 @@ Before modifying resume, session management, ACP lifecycle, or path-handling cod
 
 The package declares the following dependencies in `kimi-code-ide.el`:
 
-- `emacs "28.1"`
+- `emacs "30.1"`
 - `acp "0.11.0"` (ACP protocol layer by xenodium)
 - `transient "0.9.0"`
 - `web-server "0.1.2"` (required for the MCP tools HTTP server)

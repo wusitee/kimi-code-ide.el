@@ -4,7 +4,7 @@
 #+KEYWORDS: emacs, kimi, ai, code-assistant, acp
 #+OPTIONS: toc:t num:nil
 
-[[https://www.gnu.org/software/emacs/][file:https://img.shields.io/badge/GNU%20Emacs-28--30-blueviolet.svg]]
+[[https://www.gnu.org/software/emacs/][file:https://img.shields.io/badge/GNU%20Emacs-30-blueviolet.svg]]
 [[https://www.gnu.org/licenses/gpl-3.0][file:https://img.shields.io/badge/License-GPL%20v3-blue.svg]]
 
 * ⚠️ Warning / Disclaimer
@@ -38,7 +38,7 @@ This package enables Kimi Code to leverage the full power of Emacs through MCP t
 
 * Prerequisites
 
-- Emacs 28.1 or higher
+- Emacs 30.1 or higher
 - [[https://www.kimi.com/code/docs/en/][Kimi Code CLI]] installed and available in PATH
 - =acp.el= package (ACP implementation for Emacs)
 - =transient= package (for the menu interface)

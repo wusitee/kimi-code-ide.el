@@ -3,7 +3,7 @@
 ;; Copyright (C) 2025
 
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "28.1") (acp "0.11.0") (transient "0.9.0") (web-server "0.1.2"))
+;; Package-Requires: ((emacs "30.1") (acp "0.11.0") (transient "0.9.0") (web-server "0.1.2"))
 ;; Keywords: ai, kimi, code, assistant, acp
 
 ;; This file is not part of GNU Emacs.
