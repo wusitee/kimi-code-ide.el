@@ -25,6 +25,7 @@ Kimi Code IDE for Emacs provides native integration with [[https://www.kimi.com/
 - Diagnostic integration with Flycheck and Flymake
 - Advanced diff view with ediff integration
 - Selection and buffer tracking for better context awareness
+- Slash command completion in input buffers (=corfu= + =orderless=)
 
 ** Emacs Tool Integration
 
@@ -43,6 +44,8 @@ This package enables Kimi Code to leverage the full power of Emacs through MCP t
 - =acp.el= package (ACP implementation for Emacs)
 - =transient= package (for the menu interface)
 - =web-server= package (for MCP tools server, optional)
+- =corfu= package (for slash command completion UI)
+- =orderless= package (for fuzzy slash command matching)
 
 * Installation
 
@@ -118,6 +121,13 @@ The easiest way to interact with Kimi Code IDE is through the transient menu int
 | =M-x kimi-code-ide-toggle-recent=         | Toggle most recent Kimi window globally           |
 | =M-x kimi-code-ide-show-debug=            | Show the debug buffer                             |
 | =M-x kimi-code-ide-clear-debug=           | Clear the debug buffer                            |
+| =\\init=                                    | Start a new session (input buffer slash command)  |
+| =\\stop=                                    | Stop the current session                          |
+| =\\resume=                                  | Resume a session                                  |
+| =\\clear=                                   | Clear the conversation buffer                     |
+| =\\cancel=                                  | Cancel current prompt                             |
+| =\\import=                                  | Import/resume from context.jsonl                  |
+| =\\help=                                    | Show available slash commands                     |
 
 ** Multi-Project Support
 

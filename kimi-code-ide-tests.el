@@ -215,6 +215,42 @@
       (should (string-match-p "Here is the result." (cdar turns))))
     (delete-file file)))
 
+;;; Slash Command Tests
+
+(ert-deftest kimi-code-ide-test-slash-command-registry ()
+  "Test that slash command registry contains expected commands."
+  (should (assoc "\\init" kimi-code-ide-slash-commands))
+  (should (assoc "\\stop" kimi-code-ide-slash-commands))
+  (should (assoc "\\resume" kimi-code-ide-slash-commands))
+  (should (assoc "\\clear" kimi-code-ide-slash-commands))
+  (should (assoc "\\cancel" kimi-code-ide-slash-commands))
+  (should (assoc "\\import" kimi-code-ide-slash-commands))
+  (should (assoc "\\help" kimi-code-ide-slash-commands)))
+
+(ert-deftest kimi-code-ide-test-slash-completion-at-point ()
+  "Test slash completion returns candidates in input buffer."
+  (with-temp-buffer
+    (kimi-code-ide-input-mode)
+    (insert "\\ini")
+    (let ((result (kimi-code-ide--slash-completion-at-point)))
+      (should result)
+      (let ((candidates (nth 2 result)))
+        (should (member "init" candidates))))))
+
+(ert-deftest kimi-code-ide-test-slash-completion-no-trigger ()
+  "Test slash completion does not trigger without leading backslash."
+  (with-temp-buffer
+    (kimi-code-ide-input-mode)
+    (insert "init")
+    (should (not (kimi-code-ide--slash-completion-at-point)))))
+
+(ert-deftest kimi-code-ide-test-slash-completion-not-at-bol ()
+  "Test slash completion does not trigger mid-line."
+  (with-temp-buffer
+    (kimi-code-ide-input-mode)
+    (insert "hello \\init")
+    (should (not (kimi-code-ide--slash-completion-at-point)))))
+
 ;;; Test Runner
 
 (defun kimi-code-ide-run-tests ()
