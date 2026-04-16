@@ -3,7 +3,7 @@
 ;; Copyright (C) 2025
 
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "30.1") (acp "0.11.0") (transient "0.9.0") (web-server "0.1.2") (corfu "1.0") (orderless "1.2"))
+;; Package-Requires: ((emacs "30.1") (acp "0.11.0") (transient "0.9.0") (web-server "0.1.2"))
 ;; Keywords: ai, kimi, code, assistant, acp
 
 ;; This file is not part of GNU Emacs.
@@ -205,14 +205,14 @@ Can be either `vterm' or `eat'."
     ("/usage" . (:fn kimi-code-ide-send-prompt :desc "Display API usage and quota"))
     ("/mcp" . (:fn kimi-code-ide-send-prompt :desc "Display connected MCP servers"))
     ("/hooks" . (:fn kimi-code-ide-send-prompt :desc "Display configured hooks"))
-    ("/new" . (:fn kimi-code-ide :desc "Create a new session"))
+    ("/new" . (:fn kimi-code-ide :desc "Open Kimi Code IDE or reuse the current session"))
     ("/sessions" . (:fn kimi-code-ide-list-sessions :desc "List and switch sessions"))
     ("/title" . (:fn kimi-code-ide-send-prompt :desc "View or set session title"))
     ("/undo" . (:fn kimi-code-ide-send-prompt :desc "Roll back to previous turn"))
     ("/fork" . (:fn kimi-code-ide-send-prompt :desc "Fork session with history"))
     ("/export" . (:fn kimi-code-ide-send-prompt :desc "Export session to Markdown"))
     ("/import" . (:fn kimi-code-ide-resume :desc "Import/resume from context.jsonl"))
-    ("/clear" . (:fn kimi-code-ide--clear-conversation :desc "Clear session context"))
+    ("/clear" . (:fn kimi-code-ide--clear-conversation :desc "Clear conversation buffer"))
     ("/compact" . (:fn kimi-code-ide-send-prompt :desc "Compact context manually"))
     ("/skill:" . (:fn kimi-code-ide-send-prompt :desc "Load a specific skill"))
     ("/flow:" . (:fn kimi-code-ide-send-prompt :desc "Execute a flow skill"))
@@ -468,6 +468,7 @@ Trailing slash is stripped to match Kimi CLI's path normalization."
       (set-window-dedicated-p conv-window t))
     conv-window))
 
+;;;###autoload
 (defun kimi-code-ide--clear-conversation ()
   "Clear the conversation buffer for the current project."
   (interactive)
@@ -480,6 +481,7 @@ Trailing slash is stripped to match Kimi CLI's path normalization."
           (kimi-code-ide--render-welcome working-dir))))
     (kimi-code-ide-log "Cleared conversation buffer")))
 
+;;;###autoload
 (defun kimi-code-ide-slash-help ()
   "Show available slash commands in a temporary buffer."
   (interactive)
@@ -495,25 +497,29 @@ Trailing slash is stripped to match Kimi CLI's path normalization."
 
 (defun kimi-code-ide--slash-completion-at-point ()
   "Completion-at-point function for slash commands in input buffers.
-Returns a completion table when the current line starts with / ."
+Returns a completion table when point is within the initial slash command."
   (let ((bol-slash (save-excursion
                      (beginning-of-line)
                      (when (eq (char-after) ?/)
                        (point)))))
     (when bol-slash
       (let* ((start (1+ bol-slash))
-             (end (point))
-             (candidates (mapcar (lambda (entry)
-                                   (propertize (substring (car entry) 1)
-                                               'kimi-code-ide-slash-command entry))
-                                 kimi-code-ide-slash-commands)))
-        (list start end candidates
-              :annotation-function
-              (lambda (cand)
-                (let* ((entry (get-text-property 0 'kimi-code-ide-slash-command cand))
-                       (desc (plist-get (cdr entry) :desc)))
-                  (format " — %s" desc)))
-              :company-kind (lambda (_) 'command))))))
+             (end (save-excursion
+                    (goto-char start)
+                    (skip-chars-forward "^ \t\n")
+                    (point))))
+        (when (<= start (point) end)
+          (let ((candidates (mapcar (lambda (entry)
+                                      (propertize (substring (car entry) 1)
+                                                  'kimi-code-ide-slash-command entry))
+                                    kimi-code-ide-slash-commands)))
+            (list start end candidates
+                  :annotation-function
+                  (lambda (cand)
+                    (let* ((entry (get-text-property 0 'kimi-code-ide-slash-command cand))
+                           (desc (plist-get (cdr entry) :desc)))
+                      (format " — %s" desc)))
+                  :company-kind (lambda (_) 'command))))))))
 
 ;;; Buffer Rendering
 
@@ -738,7 +744,11 @@ Returns a completion table when the current line starts with / ."
     (setq-local corfu-quit-no-match t))
   ;; Orderless configuration for this buffer
   (when (boundp 'completion-styles)
-    (setq-local completion-styles '(orderless basic)))
+    (setq-local completion-styles
+                (if (and (boundp 'completion-styles-alist)
+                         (assoc 'orderless completion-styles-alist))
+                    '(orderless basic)
+                  '(basic))))
   (when (boundp 'completion-category-overrides)
     (setq-local completion-category-overrides '((file (styles . (partial-completion)))))))
 

@@ -251,6 +251,21 @@
     (insert "hello /init")
     (should (not (kimi-code-ide--slash-completion-at-point)))))
 
+(ert-deftest kimi-code-ide-test-slash-completion-with-arguments-bounds ()
+  "Test slash completion keeps command bounds when arguments follow."
+  (with-temp-buffer
+    (kimi-code-ide-input-mode)
+    (insert "/ini ~/src")
+    (goto-char (+ (point-min) 3))
+    (let* ((result (kimi-code-ide--slash-completion-at-point))
+           (start (nth 0 result))
+           (end (nth 1 result))
+           (candidates (nth 2 result)))
+      (should result)
+      (should (= start (1+ (point-min))))
+      (should (= end (+ (point-min) 4)))
+      (should (member "init" candidates)))))
+
 ;;; Test Runner
 
 (defun kimi-code-ide-run-tests ()

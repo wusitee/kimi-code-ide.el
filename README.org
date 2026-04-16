@@ -44,8 +44,8 @@ This package enables Kimi Code to leverage the full power of Emacs through MCP t
 - =acp.el= package (ACP implementation for Emacs)
 - =transient= package (for the menu interface)
 - =web-server= package (for MCP tools server, optional)
-- =corfu= package (for slash command completion UI)
-- =orderless= package (for fuzzy slash command matching)
+- =corfu= package (optional, for slash command completion UI)
+- =orderless= package (optional, for fuzzy slash command matching)
 
 * Installation
 
@@ -122,9 +122,9 @@ The easiest way to interact with Kimi Code IDE is through the transient menu int
 | =M-x kimi-code-ide-show-debug=            | Show the debug buffer                             |
 | =M-x kimi-code-ide-clear-debug=           | Clear the debug buffer                            |
 | =/help=                                    | Display help information                          |
-| =/new=                                     | Create a new session                              |
+| =/new=                                     | Open Kimi Code IDE or reuse the current session   |
 | =/sessions=                                | List and switch sessions                          |
-| =/clear=                                   | Clear session context                             |
+| =/clear=                                   | Clear conversation buffer                         |
 | =/cancel=                                  | Cancel current prompt                             |
 | =/stop=                                    | Stop the current session                          |
 | =/import=                                  | Import/resume from context.jsonl                  |
