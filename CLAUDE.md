@@ -76,3 +76,40 @@ Optional runtime dependencies:
 - **Autoload Cookies**: All `interactive` commands exposed via transient menus or keybindings must keep their `;;;###autoload` cookie intact. Never remove them from existing commands; add them to new user-facing interactive commands.
 - **No Coauthor**: Don't include Claude as a coauthor.
 - **Syntax Check & Review**: Before declaring any editing task complete, byte-compile modified files and review every changed line for missing parentheses, unbalanced quotes, incorrect function names, missing `require` forms, and accidentally deleted code (including `;;;###autoload` cookies).
+
+## Pre-Push Consistency Checklist
+
+Before asking the user to push, run the following automated checks. Use a subagent or bash commands to verify everything passes. Do not prompt the user to push until all checks succeed.
+
+### 1. Byte-compilation
+Run byte-compilation for all project files with warnings treated as errors:
+```bash
+emacs -batch -L . -l ci-stub.el \
+  --eval "(setq byte-compile-error-on-warn t)" \
+  -f batch-byte-compile kimi-code-ide*.el
+```
+- `ci-stub.el` must exist (create it from the CI workflow if needed).
+- Compilation must pass with **zero warnings and zero errors**.
+- Only compile `kimi-code-ide*.el`, never `*.el` (which would also compile the stub).
+
+### 2. ERT tests
+Run the full test suite:
+```bash
+emacs -batch -L . -l ci-stub.el -l ert -l kimi-code-ide-tests.el -f ert-run-tests-batch-and-exit
+```
+- All tests must pass with **0 unexpected failures**.
+
+### 3. Cross-file consistency
+If the minimum Emacs version or CI configuration was changed, verify consistency across:
+- `kimi-code-ide.el` — `Package-Requires` header
+- `README.org` — badge and prerequisites text
+- `CLAUDE.md` — Dependencies section
+- `.github/workflows/ci.yml` — `emacs-version` matrix
+
+All four locations must agree on the same minimum Emacs version.
+
+### 4. CI workflow validity (if modified)
+If `.github/workflows/ci.yml` was edited:
+- Validate YAML syntax with `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"`.
+- Ensure the byte-compile step compiles `kimi-code-ide*.el`, not `*.el`.
+- Ensure `ci-stub.el` is not tracked by git.
