@@ -822,7 +822,7 @@ Returns a completion table when point is within the initial slash command."
   ;; Append mode-line indicator
   (setq-local mode-line-format
               (append mode-line-format
-                      '((" " kimi-code-ide--mode-line-indicator)))))
+                      '((:eval (kimi-code-ide--mode-line-indicator))))))
 
 (defun kimi-code-ide--submit-input-buffer ()
   "Submit the contents of the current input buffer as a prompt.
