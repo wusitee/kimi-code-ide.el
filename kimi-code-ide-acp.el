@@ -217,7 +217,15 @@ Call ON-COMPLETE when the prompt turn finishes."
        :on-success (lambda (response)
                      (setf (kimi-code-ide-acp-session-prompt-in-progress session) nil)
                      (kimi-code-ide-debug "Prompt response: %S" response)
-                     (kimi-code-ide-acp--render-prompt-complete project-dir response)
+                     (let-alist response
+                       (when-let ((usage-total (or .usage.totalTokens
+                                                    .usage.total_tokens
+                                                    .meta.usage.totalTokens
+                                                    .meta.usage.total_tokens)))
+                         (kimi-code-ide-acp--render project-dir 'prompt-complete
+                                                    `((total-tokens . ,usage-total)
+                                                      (response . ,response))))
+                       (kimi-code-ide-acp--render-prompt-complete project-dir response))
                      (when on-complete
                        (funcall on-complete response)))
        :on-failure (lambda (error)
@@ -261,7 +269,7 @@ Call ON-COMPLETE when the prompt turn finishes."
         (pcase .sessionUpdate
           ("agent_message_chunk"
            (when-let ((text (map-nested-elt update '(content text))))
-             (kimi-code-ide-acp--render-agent-text project-dir text)))
+             (kimi-code-ide-acp--render-agent-text project-dir text update)))
           ("tool_call"
            (kimi-code-ide-acp--render-tool-call project-dir update))
           ("plan"
@@ -324,9 +332,9 @@ Call ON-COMPLETE when the prompt turn finishes."
   (when-let ((render-fn (gethash project-dir kimi-code-ide-acp--render-functions)))
     (funcall render-fn type data)))
 
-(defun kimi-code-ide-acp--render-agent-text (project-dir text)
-  "Render agent TEXT for PROJECT-DIR."
-  (kimi-code-ide-acp--render project-dir 'agent-text text))
+(defun kimi-code-ide-acp--render-agent-text (project-dir text &optional meta)
+  "Render agent TEXT for PROJECT-DIR, optionally with META."
+  (kimi-code-ide-acp--render project-dir 'agent-text (cons text meta)))
 
 (defun kimi-code-ide-acp--render-tool-call (project-dir tool-call)
   "Render TOOL-CALL for PROJECT-DIR."

@@ -178,6 +178,15 @@ Can be either `vterm' or `eat'."
 (defvar-local kimi-code-ide--response-marker nil
   "Marker for the current streaming response position.")
 
+(defvar-local kimi-code-ide--stream-start-time nil
+  "Timestamp when the current streaming response started.")
+
+(defvar-local kimi-code-ide--stream-token-count 0
+  "Estimated token count for the current streaming response.")
+
+(defvar-local kimi-code-ide--stream-chunk-count 0
+  "Number of chunks received for the current streaming response.")
+
 (defvar-local kimi-code-ide--response-raw-text nil
   "Accumulated raw Markdown text for the current streaming response.")
 
@@ -553,6 +562,23 @@ Returns a completion table when point is within the initial slash command."
           (erase-buffer))
         buffer))))
 
+(defun kimi-code-ide--mode-line-indicator ()
+  "Return a mode-line string showing stream status, or nil if idle."
+  (when (and kimi-code-ide--stream-start-time
+             (buffer-live-p (current-buffer)))
+    (let* ((elapsed (float-time (time-subtract (current-time) kimi-code-ide--stream-start-time)))
+           (tokens (max 1 kimi-code-ide--stream-token-count))
+           (speed (/ tokens elapsed))
+           (time-str (if (< elapsed 1)
+                         "<1s"
+                       (format "%.1fs" elapsed)))
+           (tok-str (if (= 1 tokens)
+                        "1 token"
+                      (format "%d tokens" tokens)))
+           (speed-str (format "%.1f tok/s" speed)))
+      (propertize (format "Thinking %s · %s · %s" time-str tok-str speed-str)
+                  'face 'mode-line-emphasis))))
+
 (defun kimi-code-ide--markdown-to-org (text)
   "Convert lightweight Markdown in TEXT to Org syntax."
   (with-temp-buffer
@@ -628,23 +654,41 @@ Returns a completion table when point is within the initial slash command."
     (pcase type
       ('user-prompt
        (kimi-code-ide--flush-response-raw-text)
+       (setq kimi-code-ide--stream-start-time nil
+             kimi-code-ide--stream-token-count 0
+             kimi-code-ide--stream-chunk-count 0)
        (goto-char (point-max))
        (kimi-code-ide--insert-read-only "* You\n")
        (kimi-code-ide--insert-read-only (kimi-code-ide--markdown-to-org data))
        (kimi-code-ide--insert-read-only "\n-----\n\n"))
       ('agent-text
-       (unless kimi-code-ide--response-marker
-         (goto-char (point-max))
-         (kimi-code-ide--insert-read-only "* Kimi\n")
-         (setq kimi-code-ide--response-marker (point-marker))
-         (set-marker-insertion-type kimi-code-ide--response-marker t)
-         (setq kimi-code-ide--response-raw-text ""))
-       (goto-char kimi-code-ide--response-marker)
-       (setq kimi-code-ide--response-raw-text
-             (concat kimi-code-ide--response-raw-text data))
-       (kimi-code-ide--insert-read-only data))
+       (let* ((text (if (consp data) (car data) data))
+              (meta (if (consp data) (cdr data) nil))
+              (usage-total (or (map-nested-elt meta '(usage totalTokens))
+                               (map-nested-elt meta '(usage total_tokens)))))
+         (unless kimi-code-ide--response-marker
+           (goto-char (point-max))
+           (kimi-code-ide--insert-read-only "* Kimi\n")
+           (setq kimi-code-ide--response-marker (point-marker))
+           (set-marker-insertion-type kimi-code-ide--response-marker t)
+           (setq kimi-code-ide--response-raw-text ""
+                 kimi-code-ide--stream-start-time (current-time)
+                 kimi-code-ide--stream-token-count 0
+                 kimi-code-ide--stream-chunk-count 0))
+         (goto-char kimi-code-ide--response-marker)
+         (setq kimi-code-ide--response-raw-text
+               (concat kimi-code-ide--response-raw-text text))
+         (kimi-code-ide--insert-read-only text)
+         (cl-incf kimi-code-ide--stream-chunk-count)
+         (if usage-total
+             (setq kimi-code-ide--stream-token-count usage-total)
+           (cl-incf kimi-code-ide--stream-token-count (max 1 (/ (length text) 4))))
+         (force-mode-line-update)))
       ('tool-call
        (kimi-code-ide--flush-response-raw-text)
+       (setq kimi-code-ide--stream-start-time nil
+             kimi-code-ide--stream-token-count 0
+             kimi-code-ide--stream-chunk-count 0)
        (goto-char (point-max))
        (let-alist data
          (kimi-code-ide--insert-read-only "#+BEGIN_QUOTE\n")
@@ -673,6 +717,9 @@ Returns a completion table when point is within the initial slash command."
          (kimi-code-ide--insert-read-only "#+END_QUOTE\n\n")))
       ('plan
        (kimi-code-ide--flush-response-raw-text)
+       (setq kimi-code-ide--stream-start-time nil
+             kimi-code-ide--stream-token-count 0
+             kimi-code-ide--stream-chunk-count 0)
        (goto-char (point-max))
        (kimi-code-ide--insert-read-only "#+BEGIN_QUOTE\n")
        (kimi-code-ide--insert-read-only "[Plan]\n")
@@ -682,6 +729,9 @@ Returns a completion table when point is within the initial slash command."
        (kimi-code-ide--insert-read-only "#+END_QUOTE\n\n"))
       ('diff
        (kimi-code-ide--flush-response-raw-text)
+       (setq kimi-code-ide--stream-start-time nil
+             kimi-code-ide--stream-token-count 0
+             kimi-code-ide--stream-chunk-count 0)
        (goto-char (point-max))
        (kimi-code-ide--insert-read-only "#+BEGIN_QUOTE\n")
        (kimi-code-ide--insert-read-only "[Diff suggestion]\n")
@@ -695,15 +745,24 @@ Returns a completion table when point is within the initial slash command."
        (kimi-code-ide--insert-read-only "#+END_QUOTE\n\n"))
       ('prompt-complete
        (kimi-code-ide--flush-response-raw-text)
+       (let ((usage-total (map-nested-elt data '(total-tokens))))
+         (when usage-total
+           (setq kimi-code-ide--stream-token-count usage-total)))
+       (setq kimi-code-ide--stream-start-time nil)
        (goto-char (point-max))
-       (kimi-code-ide--insert-read-only "\n\n"))
+       (kimi-code-ide--insert-read-only "\n\n")
+       (force-mode-line-update))
       ('prompt-error
        (kimi-code-ide--flush-response-raw-text)
+       (setq kimi-code-ide--stream-start-time nil
+             kimi-code-ide--stream-token-count 0
+             kimi-code-ide--stream-chunk-count 0)
        (goto-char (point-max))
        (kimi-code-ide--insert-read-only "#+BEGIN_CENTER\n")
        (kimi-code-ide--insert-read-only
         (format "[Error: %s]\n" (map-elt data 'message)))
-       (kimi-code-ide--insert-read-only "#+END_CENTER\n\n"))
+       (kimi-code-ide--insert-read-only "#+END_CENTER\n\n")
+       (force-mode-line-update))
       ('session-ready
        (goto-char (point-max))
        (kimi-code-ide--insert-read-only "#+BEGIN_CENTER\n")
@@ -759,7 +818,11 @@ Returns a completion table when point is within the initial slash command."
   (setq-local cursor-type 'bar)
   (buffer-disable-undo)
   (when (boundp 'org-ctrl-k-protect-subtree)
-    (setq-local org-ctrl-k-protect-subtree nil)))
+    (setq-local org-ctrl-k-protect-subtree nil))
+  ;; Append mode-line indicator
+  (setq-local mode-line-format
+              (append mode-line-format
+                      '((" " kimi-code-ide--mode-line-indicator)))))
 
 (defun kimi-code-ide--submit-input-buffer ()
   "Submit the contents of the current input buffer as a prompt.
