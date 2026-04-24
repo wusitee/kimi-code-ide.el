@@ -564,19 +564,15 @@ Returns a completion table when point is within the initial slash command."
 
 (defun kimi-code-ide--mode-line-indicator ()
   "Return a mode-line string showing stream status, or nil if idle."
-  (when (and kimi-code-ide--stream-start-time
-             (buffer-live-p (current-buffer)))
+  (when kimi-code-ide--stream-start-time
     (let* ((elapsed (float-time (time-subtract (current-time) kimi-code-ide--stream-start-time)))
-           (tokens (max 1 kimi-code-ide--stream-token-count))
-           (speed (/ tokens elapsed))
-           (time-str (if (< elapsed 1)
-                         "<1s"
-                       (format "%.1fs" elapsed)))
-           (tok-str (if (= 1 tokens)
-                        "1 token"
-                      (format "%d tokens" tokens)))
-           (speed-str (format "%.1f tok/s" speed)))
-      (propertize (format "Thinking %s · %s · %s" time-str tok-str speed-str)
+           (tokens kimi-code-ide--stream-token-count)
+           (time-str (if (< elapsed 1) "<1s" (format "%.0fs" elapsed)))
+           (info (if (> tokens 0)
+                     (let ((speed (/ (float tokens) (max 0.1 elapsed))))
+                       (format " %d tok · %.0f tok/s" tokens speed))
+                   "")))
+      (propertize (format " [%s%s]" time-str info)
                   'face 'mode-line-emphasis))))
 
 (defun kimi-code-ide--markdown-to-org (text)
@@ -654,7 +650,7 @@ Returns a completion table when point is within the initial slash command."
     (pcase type
       ('user-prompt
        (kimi-code-ide--flush-response-raw-text)
-       (setq kimi-code-ide--stream-start-time nil
+       (setq kimi-code-ide--stream-start-time (current-time)
              kimi-code-ide--stream-token-count 0
              kimi-code-ide--stream-chunk-count 0)
        (goto-char (point-max))
@@ -683,12 +679,11 @@ Returns a completion table when point is within the initial slash command."
          (if usage-total
              (setq kimi-code-ide--stream-token-count usage-total)
            (cl-incf kimi-code-ide--stream-token-count (max 1 (/ (length text) 4))))
-         (force-mode-line-update)))
+         (force-mode-line-update t)))
       ('tool-call
        (kimi-code-ide--flush-response-raw-text)
-       (setq kimi-code-ide--stream-start-time nil
-             kimi-code-ide--stream-token-count 0
-             kimi-code-ide--stream-chunk-count 0)
+       ;; Keep stream-start-time alive so mode-line indicator persists
+       ;; during tool execution; only reset on prompt-complete/error.
        (goto-char (point-max))
        (let-alist data
          (kimi-code-ide--insert-read-only "#+BEGIN_QUOTE\n")
@@ -717,9 +712,7 @@ Returns a completion table when point is within the initial slash command."
          (kimi-code-ide--insert-read-only "#+END_QUOTE\n\n")))
       ('plan
        (kimi-code-ide--flush-response-raw-text)
-       (setq kimi-code-ide--stream-start-time nil
-             kimi-code-ide--stream-token-count 0
-             kimi-code-ide--stream-chunk-count 0)
+       ;; Keep stream-start-time alive during plan display.
        (goto-char (point-max))
        (kimi-code-ide--insert-read-only "#+BEGIN_QUOTE\n")
        (kimi-code-ide--insert-read-only "[Plan]\n")
@@ -729,9 +722,7 @@ Returns a completion table when point is within the initial slash command."
        (kimi-code-ide--insert-read-only "#+END_QUOTE\n\n"))
       ('diff
        (kimi-code-ide--flush-response-raw-text)
-       (setq kimi-code-ide--stream-start-time nil
-             kimi-code-ide--stream-token-count 0
-             kimi-code-ide--stream-chunk-count 0)
+       ;; Keep stream-start-time alive during diff display.
        (goto-char (point-max))
        (kimi-code-ide--insert-read-only "#+BEGIN_QUOTE\n")
        (kimi-code-ide--insert-read-only "[Diff suggestion]\n")
@@ -751,7 +742,7 @@ Returns a completion table when point is within the initial slash command."
        (setq kimi-code-ide--stream-start-time nil)
        (goto-char (point-max))
        (kimi-code-ide--insert-read-only "\n\n")
-       (force-mode-line-update))
+       (force-mode-line-update t))
       ('prompt-error
        (kimi-code-ide--flush-response-raw-text)
        (setq kimi-code-ide--stream-start-time nil
@@ -762,7 +753,7 @@ Returns a completion table when point is within the initial slash command."
        (kimi-code-ide--insert-read-only
         (format "[Error: %s]\n" (map-elt data 'message)))
        (kimi-code-ide--insert-read-only "#+END_CENTER\n\n")
-       (force-mode-line-update))
+       (force-mode-line-update t))
       ('session-ready
        (goto-char (point-max))
        (kimi-code-ide--insert-read-only "#+BEGIN_CENTER\n")
